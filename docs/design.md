@@ -75,7 +75,24 @@ Calculator 签名：`CalcAsync(MapMatrixData data, IMapMatrixOps ops, Cancellati
 
 ---
 
-### 6. 文件组织：新建 `Scanning/MapMatrix/` 子目录
+### 6. 矩阵行列约定：行向量（row-vector）
+
+`System.Numerics.Matrix4x4` 使用**行向量**约定（`v * M`），基向量存储在**行**中：
+
+| 行 | 字段 | 含义 |
+|----|------|------|
+| Row 1 | M11, M12, M13 | X 基向量（焊缝方向） |
+| Row 2 | M21, M22, M23 | Y 基向量（侧面法向量） |
+| Row 3 | M31, M32, M33 | Z 基向量（主面法向量） |
+| Row 4 | M41, M42, M43 | 平移 |
+
+原始 `CalcCoordinateMatrix` 和 `MapCalculator` 均遵循此约定。`Quaternion.CreateFromRotationMatrix` 和 `Matrix4x4.CreateFromQuaternion` 也使用相同的行向量约定——行就是基向量。四元数往返转换（matrix → quaternion → matrix）保持行列一致性。
+
+**关于 `WeldPoseMapUtils.TransferPose` 中的注释**："注意这里的 transfer 是列优先矩阵"具有误导性。`transfer`（即 `CalcBy(t)` 的输出）使用的是 .NET 标准行向量约定（行=基向量）。该方法中的 `Matrix4x4.Transpose(transfer)` 是将 .NET 行向量约定转换为 MathNet Numerics 的列向量约定（数学惯例），以便送入 SVD 极分解。Transpose 是跨库约定转换，不意味着 `transfer` 本身是"列优先"。
+
+---
+
+### 7. 文件组织：新建 `Scanning/MapMatrix/` 子目录
 
 ```
 Scanning/MapMatrix/
@@ -111,6 +128,7 @@ Scanning/MapMatrix/
 - **`BothRobotRecordCalculator` 内部仍有 if/else**（起点有记录 vs 终点有记录）→ 这是该场景的内在逻辑分支，属于实现细节而非场景分支，不做进一步拆分
 - **`GetNormalFromVcm` 单 VCM 版本使用 `idxInWsg=0` 判定板件顺序** → 如果起终点的板件排列不同，可能需要补充 `idxInWsg` 参数
 - **t 值姿态插值使用四元数 nlerp（`Quaternion.Lerp`）** → 小角度变化下近似 SLERP，精度足够。若后续遇到大角度场景，可改用 `Quaternion.Slerp`
+- **`WeldPoseMapUtils.TransferPose` 注释"transfer 是列优先矩阵"具有误导性** → `transfer` 实际使用 .NET 标准行向量约定（行=基向量），注释中的 `Transpose` 是 .NET ↔ MathNet 跨库约定转换，不影响 `MapCalculator` 输出的正确性
 
 ## Migration Plan
 

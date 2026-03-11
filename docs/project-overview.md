@@ -39,7 +39,7 @@
 ## 文件结构
 
 ```
-C:\Work\ClaudeTools\
+C:\Work\ClaudeMdTools\
 ├── package.json           # 项目配置
 ├── server.js              # Express + WebSocket 服务器 (端口 8080)
 ├── public/

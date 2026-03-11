@@ -5,7 +5,7 @@
 ## What Changes
 
 - 引入 `IMapCalculatable` 接口（原 `IMapMatrixCalculator`），将"根据 RegType 组合计算坐标矩阵"的职责提取为独立策略类
-- 引入 `IMapCalculator` 接口，支持基于 t 值（t∈[0,1]）的姿态变换插值：`CalcBy(t)` 返回对应位置的变换矩阵，`Mul(lMat)` 支持左乘叠加
+- 引入 `IMapCalculator` 接口，支持基于 t 值（t∈[0,1]）的姿态变换插值：`CalcBy(t)` 返回对应位置的变换矩阵（遵循 `System.Numerics.Matrix4x4` 行向量约定，行=基向量），`Mul(lMat)` 支持左乘叠加
 - 起终点法向量独立处理：`GetNormalFromVcm` 改为单 VCM 版本，`CalcCoordinateMatrix` 改为 6 参数版本，分别接收起终点的法向量
 - 为当前已有的四类场景各实现一个 Calculator 类：
   - `BothVisionedCalculator`：起点和终点均为 Visioned

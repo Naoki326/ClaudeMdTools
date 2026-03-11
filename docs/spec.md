@@ -20,6 +20,10 @@
 
 实现类 `MapCalculator` SHALL 在构造时从起终点法向量构建旋转矩阵并提取四元数，`CalcBy(t)` 通过 `Quaternion.Lerp` 插值姿态。坐标的平移补偿保持原有逻辑不变。
 
+矩阵 MUST 遵循 `System.Numerics.Matrix4x4` 的行向量约定（`v * M`）：Row 1 = X 基向量（焊缝方向，非归一化），Row 2 = Y 基向量（侧面法向量），Row 3 = Z 基向量（主面法向量），Row 4 = 平移。`QuaternionFromAxes` 构建旋转矩阵时行=基向量，与 `Quaternion.CreateFromRotationMatrix` / `Matrix4x4.CreateFromQuaternion` 的行向量约定一致。`CalcBy(t)` 从插值后的旋转矩阵提取 Row 2（M21-M23）和 Row 3（M31-M33）作为 Y、Z 基向量。
+
+> **注意**：`WeldPoseMapUtils.TransferPose` 中的注释"transfer 是列优先矩阵"具有误导性。`CalcBy(t)` 的输出使用 .NET 标准行向量约定。`TransferPose` 中的 `Transpose` 是将行向量约定转换为 MathNet Numerics 列向量约定以送入 SVD，属于跨库约定转换。
+
 #### Scenario: 起点变换
 - **WHEN** 调用 `CalcBy(0)`
 - **THEN** 返回起点处的变换矩阵（使用起点法向量构建的坐标系）

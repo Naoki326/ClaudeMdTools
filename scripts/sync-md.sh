@@ -4,6 +4,7 @@
 # 同时记录对话 session ID 和时间戳到 .metadata.json
 
 DOCS_DIR="$(dirname "$(dirname "$0")")/docs"
+PROJECT_ROOT="$(cd "$(dirname "$(dirname "$0")")" && pwd)"
 
 # 从 stdin 读取 hook 数据（Claude Code 通过 stdin 传递 JSON）
 read -r INPUT
@@ -28,6 +29,11 @@ fi
 if [ ! -f "$FILE_PATH" ]; then
   exit 0
 fi
+
+# 计算相对于项目根目录的相对路径
+NORM_FILE=$(echo "$FILE_PATH" | sed 's|\\\\|/|g; s|\\|/|g')
+NORM_FILE=$(cygpath -u "$NORM_FILE" 2>/dev/null || echo "$NORM_FILE")
+REL_SOURCE=$(realpath --relative-to="$PROJECT_ROOT" "$NORM_FILE" 2>/dev/null || echo "$FILE_PATH")
 
 # 确保 docs 目录存在
 mkdir -p "$DOCS_DIR"
@@ -57,7 +63,7 @@ if [ -f "$TARGET_PATH" ]; then
   if [ -f "$SOURCE_RECORD" ]; then
     RECORDED_SOURCE=$(grep "^${TARGET_NAME}=" "$SOURCE_RECORD" 2>/dev/null | head -1 | cut -d= -f2-)
   fi
-  if [ -n "$RECORDED_SOURCE" ] && [ "$RECORDED_SOURCE" != "$FILE_PATH" ]; then
+  if [ -n "$RECORDED_SOURCE" ] && [ "$RECORDED_SOURCE" != "$REL_SOURCE" ]; then
     TARGET_NAME="${PREFIX}_${BASENAME}"
     TARGET_PATH="$DOCS_DIR/$TARGET_NAME"
   fi
@@ -72,7 +78,7 @@ if [ -f "$SOURCE_RECORD" ]; then
   grep -v "^${TARGET_NAME}=" "$SOURCE_RECORD" > "${SOURCE_RECORD}.tmp" 2>/dev/null
   mv "${SOURCE_RECORD}.tmp" "$SOURCE_RECORD"
 fi
-echo "${TARGET_NAME}=${FILE_PATH}" >> "$SOURCE_RECORD"
+echo "${TARGET_NAME}=${REL_SOURCE}" >> "$SOURCE_RECORD"
 
 # 从 stdin JSON 中提取 session_id
 SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p' | head -1)
@@ -82,5 +88,5 @@ TIMESTAMP=$(date +%s%3N 2>/dev/null || python3 -c "import time; print(int(time.t
 # 通知服务器更新元数据（通过 HTTP API）
 curl -s -X POST "http://localhost:8080/api/metadata" \
   -H "Content-Type: application/json" \
-  -d "{\"fileName\":\"${TARGET_NAME}\",\"sessionId\":\"${SESSION_ID}\",\"timestamp\":${TIMESTAMP},\"sourcePath\":\"${FILE_PATH}\"}" \
+  -d "{\"fileName\":\"${TARGET_NAME}\",\"sessionId\":\"${SESSION_ID}\",\"timestamp\":${TIMESTAMP},\"sourcePath\":\"${REL_SOURCE}\"}" \
   > /dev/null 2>&1 || true

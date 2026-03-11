@@ -2,51 +2,56 @@
   "sync-verified.md": {
     "sessionId": "3e3f6baf-f772-4ad3-96ce-fa5df758ccd9",
     "timestamp": 1773043176428,
-    "sourcePath": "C:\\Work\\ClaudeTools\\notes\\sync-verified.md"
+    "sourcePath": "../ClaudeMdTools/notes/sync-verified.md"
   },
   "spec.md": {
     "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
     "timestamp": 1773049920085,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\specs\\map-matrix-calculator\\spec.md"
-  },
-  "C___Work__maprefact__openspec__specs__robot-record-visioned-calculator_spec.md": {
-    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
-    "timestamp": 1773050153006,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\specs\\robot-record-visioned-calculator\\spec.md"
+    "sourcePath": "../maprefact/openspec/specs/map-matrix-calculator/spec.md"
   },
   "tasks.md": {
     "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
     "timestamp": 1773051543455,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\refactor-map-matrix-polymorphism\\tasks.md"
+    "sourcePath": "../maprefact/openspec/changes/refactor-map-matrix-polymorphism/tasks.md"
   },
   "proposal.md": {
     "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
     "timestamp": 1773052782927,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\refactor-map-matrix-polymorphism\\proposal.md"
+    "sourcePath": "../maprefact/openspec/changes/refactor-map-matrix-polymorphism/proposal.md"
   },
   "design.md": {
     "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
     "timestamp": 1773052853482,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\refactor-map-matrix-polymorphism\\design.md"
-  },
-  "C___Work__maprefact__openspec__changes__add-robot-record-visioned-calculator_proposal.md": {
-    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
-    "timestamp": 1773052890676,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\add-robot-record-visioned-calculator\\proposal.md"
-  },
-  "C___Work__maprefact__openspec__changes__add-robot-record-visioned-calculator_design.md": {
-    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
-    "timestamp": 1773052928483,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\add-robot-record-visioned-calculator\\design.md"
-  },
-  "C___Work__maprefact__openspec__changes__add-robot-record-visioned-calculator_tasks.md": {
-    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
-    "timestamp": 1773052957953,
-    "sourcePath": "C:\\Work\\maprefact\\openspec\\changes\\add-robot-record-visioned-calculator\\tasks.md"
+    "sourcePath": "../maprefact/openspec/changes/refactor-map-matrix-polymorphism/design.md"
   },
   "DS923-ϵͳ���������汾9�����ֲ�.md": {
     "sessionId": "fb817c9f-3f34-4bdd-9965-f74bf26fba06",
     "timestamp": 1773113530123,
-    "sourcePath": "C:\\Work\\ds923\\DS923-ϵͳ���������汾9�����ֲ�.md"
+    "sourcePath": "../ds923/DS923-ϵͳ���������汾9�����ֲ�.md"
+  },
+  "README.md": {
+    "sessionId": "3e3f6baf-f772-4ad3-96ce-fa5df758ccd9",
+    "timestamp": 1773198863165,
+    "sourcePath": "README.md"
+  },
+  "add-robot-record-visioned-calculator_proposal.md": {
+    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
+    "timestamp": 1773052890676,
+    "sourcePath": "../maprefact/openspec/changes/add-robot-record-visioned-calculator/proposal.md"
+  },
+  "robot-record-visioned-calculator_spec.md": {
+    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
+    "timestamp": 1773050153006,
+    "sourcePath": "../maprefact/openspec/specs/robot-record-visioned-calculator/spec.md"
+  },
+  "add-robot-record-visioned-calculator_design.md": {
+    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
+    "timestamp": 1773052928483,
+    "sourcePath": "../maprefact/openspec/changes/add-robot-record-visioned-calculator/design.md"
+  },
+  "add-robot-record-visioned-calculator_tasks.md": {
+    "sessionId": "84b9cc4a-8d50-4dbe-871a-1a716e6d7d35",
+    "timestamp": 1773052957953,
+    "sourcePath": "../maprefact/openspec/changes/add-robot-record-visioned-calculator/tasks.md"
   }
 }
