@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markdown 文档查看器</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" id="hljs-light">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-dark" disabled>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+:root {
+  --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-tertiary: #e8ecf0;
+  --text: #1f2328; --text-secondary: #656d76; --border: #d0d7de;
+  --accent: #0969da; --accent-hover: #0550ae;
+  --danger: #cf222e; --danger-hover: #a40e26;
+  --sidebar-w: 280px;
+}
+[data-theme="dark"] {
+  --bg: #0d1117; --bg-secondary: #161b22; --bg-tertiary: #21262d;
+  --text: #e6edf3; --text-secondary: #8b949e; --border: #30363d;
+  --accent: #58a6ff; --accent-hover: #79c0ff;
+  --danger: #f85149; --danger-hover: #ff7b72;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
+
+/* 侧边栏 */
+.sidebar { width: var(--sidebar-w); min-width: var(--sidebar-w); background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh; transition: width 0.2s, min-width 0.2s, padding 0.2s; overflow: hidden; }
+.sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.sidebar-header h1 { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.sidebar-actions { display: flex; gap: 6px; }
+.file-list { flex: 1; overflow-y: auto; padding: 8px; }
+.session-group { margin-bottom: 4px; }
+.session-header { padding: 6px 12px; font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; border-radius: 4px; }
+.session-header:hover { background: var(--bg-tertiary); }
+.session-header .collapse-icon { font-size: 10px; transition: transform 0.15s; }
+.session-header .collapse-icon.collapsed { transform: rotate(-90deg); }
+.session-header .session-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-header .file-count { font-weight: 400; color: var(--text-secondary); opacity: 0.7; }
+.session-files { }
+.session-files.collapsed { display: none; }
+.file-item { padding: 8px 12px; padding-left: 24px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-size: 14px; transition: background 0.15s; }
+.file-item:hover { background: var(--bg-tertiary); }
+.file-item.active { background: var(--accent); color: #fff; }
+.file-item .file-name { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
+.file-item .delete-btn { opacity: 0; background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 0 4px; flex-shrink: 0; }
+.file-item:hover .delete-btn { opacity: 1; }
+.file-item.active .delete-btn { color: rgba(255,255,255,0.8); }
+
+/* 侧边栏展开按钮 */
+.sidebar-toggle { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text); font-size: 16px; transition: background 0.15s; line-height: 1; }
+.sidebar-toggle:hover { background: var(--bg-tertiary); }
+
+/* 按钮 */
+.icon-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text); font-size: 14px; transition: background 0.15s; }
+.icon-btn:hover { background: var(--bg-tertiary); }
+.btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger-hover); }
+
+/* 主内容区 */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.toolbar { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; background: var(--bg-secondary); }
+.toolbar .file-title { font-weight: 600; font-size: 15px; flex: 1; }
+.content { flex: 1; overflow: hidden; display: flex; }
+
+/* Markdown 渲染区 */
+.markdown-view { flex: 1; overflow-y: auto; padding: 32px 40px; }
+.markdown-body { max-width: 860px; margin: 0 auto; line-height: 1.6; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; line-height: 1.25; }
+.markdown-body h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+.markdown-body h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+.markdown-body h3 { font-size: 1.25em; }
+.markdown-body p { margin-bottom: 16px; }
+.markdown-body code { background: var(--bg-tertiary); padding: 0.2em 0.4em; border-radius: 4px; font-size: 85%; }
+.markdown-body pre { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; overflow-x: auto; margin-bottom: 16px; }
+.markdown-body pre code { background: transparent; padding: 0; font-size: 85%; }
+.markdown-body blockquote { padding: 0 16px; color: var(--text-secondary); border-left: 4px solid var(--border); margin-bottom: 16px; }
+.markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 16px; }
+.markdown-body li { margin-bottom: 4px; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+.markdown-body th, .markdown-body td { padding: 8px 13px; border: 1px solid var(--border); }
+.markdown-body th { background: var(--bg-secondary); font-weight: 600; }
+.markdown-body a { color: var(--accent); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body img { max-width: 100%; border-radius: 6px; }
+.markdown-body hr { border: none; border-top: 2px solid var(--border); margin: 24px 0; }
+
+/* 编辑模式 */
+.edit-container { display: flex; flex: 1; overflow: hidden; }
+.edit-container .editor-pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+.edit-container .preview-pane { flex: 1; overflow-y: auto; padding: 32px 40px; }
+.edit-container textarea { flex: 1; border: none; outline: none; resize: none; padding: 16px; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; font-size: 14px; line-height: 1.6; background: var(--bg); color: var(--text); }
+.pane-header { padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+
+/* 空状态 */
+.empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); font-size: 15px; flex-direction: column; gap: 12px; }
+
+/* 对话框 */
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.dialog { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: 360px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
+.dialog h3 { margin-bottom: 16px; }
+.dialog input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--text); margin-bottom: 16px; }
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 状态指示 */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.status-dot.connected { background: #2ea043; }
+.status-dot.disconnected { background: var(--danger); }
+
+/* 通知 */
+.toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg-secondary); border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; animation: slideIn 0.3s ease; }
+@keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>MD Docs</h1>
+    <div class="sidebar-actions">
+      <button class="icon-btn" onclick="showNewFileDialog()" title="新建文件">+</button>
+      <button class="icon-btn" onclick="toggleTheme()" title="切换主题" id="theme-btn">🌙</button>
+      <button class="icon-btn" onclick="toggleSidebar()" title="收起侧边栏">◀</button>
+    </div>
+  </div>
+  <div class="file-list" id="file-list"></div>
+  <div style="padding:8px 12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-secondary);display:flex;align-items:center;">
+    <span class="status-dot" id="ws-status"></span>
+    <span id="ws-text">连接中...</span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="toolbar" id="toolbar-always" style="display:none">
+    <button class="sidebar-toggle" id="sidebar-open-btn-empty" onclick="toggleSidebar()" title="展开侧边栏">☰</button>
+    <span style="flex:1"></span>
+  </div>
+  <div class="toolbar" id="toolbar" style="display:none">
+    <button class="sidebar-toggle" id="sidebar-open-btn" onclick="toggleSidebar()" title="展开侧边栏" style="display:none">☰</button>
+    <span class="file-title" id="file-title"></span>
+    <button class="btn" id="edit-btn" onclick="toggleEdit()">编辑</button>
+    <button class="btn btn-primary" id="save-btn" onclick="saveFile()" style="display:none">保存</button>
+    <button class="btn" id="cancel-btn" onclick="cancelEdit()" style="display:none">取消</button>
+  </div>
+  <div class="content" id="content">
+    <div class="empty-state">
+      <div style="font-size:40px">📄</div>
+      <div>选择一个文件或新建文档开始</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentFile = null;
+let isEditing = false;
+let originalContent = '';
+let ws = null;
+let fileDataCache = []; // 缓存文件列表数据，用于获取标题
+
+// 侧边栏折叠
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const collapsed = sidebar.classList.toggle('collapsed');
+  // 当有文件打开时，toggle toolbar 中的展开按钮
+  document.getElementById('sidebar-open-btn').style.display = collapsed ? '' : 'none';
+  // 空状态时的展开按钮
+  const emptyToolbar = document.getElementById('toolbar-always');
+  emptyToolbar.style.display = (collapsed && !currentFile) ? 'flex' : 'none';
+  localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '');
+}
+
+// 初始化侧边栏状态
+(function initSidebar() {
+  if (localStorage.getItem('sidebar-collapsed') === '1') {
+    document.querySelector('.sidebar').classList.add('collapsed');
+    document.getElementById('toolbar-always').style.display = 'flex';
+  }
+})();
+
+// marked 配置
+marked.setOptions({
+  highlight: (code, lang) => {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  },
+  breaks: true,
+  gfm: true,
+});
+
+// 主题切换
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  document.getElementById('theme-btn').textContent = isDark ? '🌙' : '☀️';
+  document.getElementById('hljs-light').disabled = !isDark;
+  document.getElementById('hljs-dark').disabled = isDark;
+  localStorage.setItem('theme', isDark ? 'light' : 'dark');
+}
+
+// 初始化主题
+(function initTheme() {
+  const saved = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('theme-btn').textContent = saved === 'dark' ? '☀️' : '🌙';
+  document.getElementById('hljs-light').disabled = saved === 'dark';
+  document.getElementById('hljs-dark').disabled = saved !== 'dark';
+})();
+
+// WebSocket 连接
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen = () => {
+    document.getElementById('ws-status').className = 'status-dot connected';
+    document.getElementById('ws-text').textContent = '已连接';
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-status').className = 'status-dot disconnected';
+    document.getElementById('ws-text').textContent = '已断开';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'file-change') {
+      loadFileList();
+      if (currentFile === data.name && !isEditing) {
+        loadFile(data.name);
+        showToast(`${data.name} 已更新`);
+      }
+    }
+  };
+}
+connectWS();
+
+// 文件列表（按对话分组）
+async function loadFileList() {
+  const res = await fetch('/api/files');
+  const data = await res.json();
+  const list = document.getElementById('file-list');
+  const groups = data.groups || [];
+  fileDataCache = data.files || [];
+
+  if (groups.length === 0) {
+    list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:13px">暂无文档</div>';
+    return;
+  }
+
+  list.innerHTML = groups.map((group, gi) => {
+    const sessionLabel = formatSessionLabel(group);
+    const isCollapsed = collapsedSessions.has(group.sessionId || '__ungrouped__');
+    const files = group.files.map(f => `
+      <div class="file-item ${f.name === currentFile ? 'active' : ''}" onclick="loadFile('${f.name}')" title="${f.name}${f.sourcePath ? '\n' + f.sourcePath : ''}">
+        <span class="file-name">${escapeHtml(f.title || f.name)}</span>
+        <button class="delete-btn" onclick="event.stopPropagation();deleteFile('${f.name}')" title="删除">×</button>
+      </div>
+    `).join('');
+
+    return `
+      <div class="session-group">
+        <div class="session-header" onclick="toggleSessionCollapse('${group.sessionId || '__ungrouped__'}')">
+          <span class="collapse-icon ${isCollapsed ? 'collapsed' : ''}">▼</span>
+          <span class="session-label">${sessionLabel}</span>
+          <span class="file-count">${group.files.length}</span>
+        </div>
+        <div class="session-files ${isCollapsed ? 'collapsed' : ''}">${files}</div>
+      </div>`;
+  }).join('');
+}
+
+// 会话分组折叠状态
+const collapsedSessions = new Set();
+
+function toggleSessionCollapse(sessionId) {
+  if (collapsedSessions.has(sessionId)) {
+    collapsedSessions.delete(sessionId);
+  } else {
+    collapsedSessions.add(sessionId);
+  }
+  loadFileList();
+}
+
+// 格式化对话标签
+function formatSessionLabel(group) {
+  if (!group.sessionId) return '未分组';
+  // 用最早文件的时间戳作为对话时间
+  const ts = Math.min(...group.files.map(f => f.timestamp));
+  const d = new Date(ts);
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  let dateStr;
+  if (isToday) dateStr = '今天';
+  else if (isYesterday) dateStr = '昨天';
+  else dateStr = `${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  // 取 session ID 前 6 位作为短标识
+  const shortId = group.sessionId.substring(0, 6);
+  return `${dateStr} ${time} #${shortId}`;
+}
+
+// 加载文件
+async function loadFile(name) {
+  if (isEditing) return;
+  currentFile = name;
+  const res = await fetch(`/api/files/${encodeURIComponent(name)}`);
+  const data = await res.json();
+  originalContent = data.content;
+
+  document.getElementById('toolbar').style.display = 'flex';
+  document.getElementById('toolbar-always').style.display = 'none';
+  // 用缓存的标题或从内容中提取
+  const cached = fileDataCache.find(f => f.name === name);
+  const displayTitle = cached ? cached.title : name;
+  document.getElementById('file-title').textContent = displayTitle;
+
+  // 更新侧边栏展开按钮可见性
+  const sidebarCollapsed = document.querySelector('.sidebar').classList.contains('collapsed');
+  document.getElementById('sidebar-open-btn').style.display = sidebarCollapsed ? '' : 'none';
+
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(data.content)}</div></div>`;
+
+  loadFileList();
+}
+
+// 编辑模式
+function toggleEdit() {
+  isEditing = true;
+  document.getElementById('edit-btn').style.display = 'none';
+  document.getElementById('save-btn').style.display = '';
+  document.getElementById('cancel-btn').style.display = '';
+
+  const content = document.getElementById('content');
+  content.innerHTML = `
+    <div class="edit-container">
+      <div class="editor-pane">
+        <div class="pane-header">编辑</div>
+        <textarea id="editor" oninput="updatePreview()">${escapeHtml(originalContent)}</textarea>
+      </div>
+      <div class="preview-pane">
+        <div class="pane-header">预览</div>
+        <div class="markdown-body" id="preview">${marked.parse(originalContent)}</div>
+      </div>
+    </div>`;
+}
+
+function updatePreview() {
+  const text = document.getElementById('editor').value;
+  document.getElementById('preview').innerHTML = marked.parse(text);
+}
+
+function cancelEdit() {
+  isEditing = false;
+  document.getElementById('edit-btn').style.display = '';
+  document.getElementById('save-btn').style.display = 'none';
+  document.getElementById('cancel-btn').style.display = 'none';
+  loadFile(currentFile);
+}
+
+async function saveFile() {
+  const text = document.getElementById('editor').value;
+  await fetch(`/api/files/${encodeURIComponent(currentFile)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text }),
+  });
+  originalContent = text;
+  isEditing = false;
+  document.getElementById('edit-btn').style.display = '';
+  document.getElementById('save-btn').style.display = 'none';
+  document.getElementById('cancel-btn').style.display = 'none';
+  loadFile(currentFile);
+  showToast('已保存');
+}
+
+// 新建文件
+function showNewFileDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog">
+      <h3>新建文档</h3>
+      <input type="text" id="new-file-name" placeholder="文件名 (例如: notes.md)" autofocus>
+      <div class="dialog-actions">
+        <button class="btn" onclick="this.closest('.dialog-overlay').remove()">取消</button>
+        <button class="btn btn-primary" onclick="createFile()">创建</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('input').addEventListener('keydown', e => { if (e.key === 'Enter') createFile(); });
+  overlay.querySelector('input').focus();
+}
+
+async function createFile() {
+  let name = document.getElementById('new-file-name').value.trim();
+  if (!name) return;
+  if (!name.endsWith('.md')) name += '.md';
+  const res = await fetch('/api/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, content: `# ${name.replace('.md', '')}\n\n` }),
+  });
+  document.querySelector('.dialog-overlay')?.remove();
+  if (res.ok) {
+    await loadFileList();
+    loadFile(name);
+    showToast('已创建');
+  } else {
+    const err = await res.json();
+    showToast(err.error || '创建失败');
+  }
+}
+
+// 删除文件
+async function deleteFile(name) {
+  if (!confirm(`确定删除 ${name}？`)) return;
+  await fetch(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (currentFile === name) {
+    currentFile = null;
+    isEditing = false;
+    document.getElementById('toolbar').style.display = 'none';
+    document.getElementById('content').innerHTML = '<div class="empty-state"><div style="font-size:40px">📄</div><div>选择一个文件或新建文档开始</div></div>';
+  }
+  loadFileList();
+  showToast('已删除');
+}
+
+// 工具函数
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg) {
+  const existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// 初始化
+loadFileList();
+</script>
+</body>
+</html>
