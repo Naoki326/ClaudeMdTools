@@ -1,16 +1,30 @@
-# ClaudeTools - Markdown 文档查看器
+# ClaudeMd Tools — 知识库 & 课程查看器
 
-配合 Claude Code Hook 的本地 Markdown 文档查看/编辑工具。当 Claude 在任意位置创建或修改 `.md` 文件时，自动同步到网站实时查看。
+一个本地 Web 应用，把散落在各项目文件夹里的 Markdown 文档和 HTML 课程**统一查看、分类、编辑**。直接读取原始文件，不复制、不移动；文件一改，网页实时刷新。
 
-## 功能
+## 它解决什么问题
 
-- **自动同步** — Claude Code 写入的 `.md` 文件通过 PostToolUse Hook 自动复制到 `docs/` 目录
-- **实时更新** — WebSocket 推送文件变更，无需手动刷新
-- **在线编辑** — 左右分栏的 Markdown 编辑器，支持实时预览
-- **对话分组** — 按 Claude Code session 自动归类文档
-- **智能标题** — 从 `# 标题` 或源文件路径自动推导可读标题
-- **暗色模式** — 支持明/暗主题切换，状态自动保存
-- **可折叠侧边栏** — 点击收起/展开，状态持久化
+日常开发中，`.md` 笔记散落在各个项目目录里，HTML 课程（由 `/teach` 等生成）也在各自的 workspace 下。想集中查看它们很麻烦——要么逐个打开文件，要么手动复制到一处。
+
+这个工具的做法：**你告诉它去哪些目录找，它负责扫描、分类、展示**。文件保持原位，改了就实时反映。
+
+## 两个视图
+
+### 📚 知识库（Markdown 文档）
+
+- 配置若干**根目录**（如 `C:/Work`）
+- server 递归扫描这些目录下的所有 `.md` 文件（自动跳过 `node_modules`、`.git`、`bin`、`obj` 等）
+- 按**项目文件夹**（根目录下的一级子目录）分组，可折叠
+- 点击文件在右侧查看渲染后的 Markdown，支持**在线编辑**（保存写回原始文件）
+- 支持**新窗口打开**（渲染好的独立 HTML 页面）
+
+### 🎓 课程（HTML 教学网页）
+
+- 配置若干**根目录**（如 `C:/Work/AI`）
+- server 扫描根目录下含 `lessons/` 目录的子文件夹，识别为教学 workspace
+- 托管整个 workspace 目录树（`lessons/` + `reference/` + `assets/`），课程间的相对路径引用全部正常
+- 按 workspace 分组，课程 / 速查卡分类，可折叠
+- 点击课程在右侧 iframe 中展示（样式、交互脚本正常加载）
 
 ## 快速开始
 
@@ -21,45 +35,53 @@ npm start
 
 浏览器打开 http://localhost:8080
 
-## 配置 Hook
+首次使用时知识库和课程可能没有内容——点击右上角 **⚙** 添加根目录即可。
 
-在 Claude Code 的 `settings.json` 中添加：
+## 在网页里配置根目录
 
+知识库和课程各有独立的根目录配置，都在网页内通过 **⚙** 按钮管理：
+
+| 视图 | 配置文件 | 扫描规则 |
+|------|---------|---------|
+| 知识库 | `knowledge.config.json` | 递归扫描所有 `.md`，按一级子目录（项目）分组 |
+| 课程 | `teach.config.json` | 扫描一级子目录，含 `lessons/` 的识别为 workspace |
+
+配置对话框会**实时预览**每个根目录扫到了多少文件、哪些项目，加错路径立刻能看到（✗ 不存在 / 0 个）。
+
+配置示例：
 ```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash C:/Work/ClaudeMdTools/scripts/sync-md.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
+// knowledge.config.json
+{ "roots": ["C:/Work"] }
+
+// teach.config.json
+{ "roots": ["C:/Work/AI", "C:/Work/AnotherFSM"] }
 ```
 
-注意这一行： "command": "bash C:/Work/ClaudeMdTools/scripts/sync-md.sh" 路径C:/Work/ClaudeMdTools/需要替换成你的项目地址
-配置后，Claude 每次使用 Write 或 Edit 工具操作 `.md` 文件时，Hook 脚本会自动：
-1. 将文件复制到 `docs/` 目录
-2. 通过 API 记录 session ID、时间戳、源路径等元数据
+## 自动运行（PM2）
+
+本项目用 PM2 作为后台服务常驻运行，崩溃自动重启、登录自动拉起。
+
+```bash
+npm run pm2:start    # 启动
+npm run pm2:stop     # 停止
+npm run pm2:restart  # 重启
+npm run pm2:logs     # 查看日志
+npm run pm2:save     # 保存进程快照（开机恢复用）
+```
+
+详见 [DEPLOY.md](./DEPLOY.md)。
 
 ## 项目结构
 
 ```
 ClaudeMdTools/
-├── server.js              # Express + WebSocket 服务端
+├── server.js                 # Express + WebSocket 服务端
 ├── public/
-│   └── index.html         # 单页前端（查看/编辑/管理）
-├── scripts/
-│   └── sync-md.sh         # PostToolUse Hook 脚本
-├── docs/                  # 同步的文档存放目录
-│   ├── .metadata.json     # 文件元数据（session、时间戳）
-│   └── .sources           # 文件名 → 源路径映射
+│   └── index.html            # 单页前端（知识库 / 课程 / 编辑 / 配置）
+├── ecosystem.config.cjs      # PM2 进程配置
+├── knowledge.config.json     # 知识库根目录配置
+├── teach.config.json         # 课程根目录配置
+├── DEPLOY.md                 # 部署运维说明
 └── package.json
 ```
 
@@ -67,14 +89,23 @@ ClaudeMdTools/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/files` | 获取文件列表（含标题、分组） |
-| GET | `/api/files/:name` | 获取文件内容 |
-| POST | `/api/files` | 创建新文件 |
-| PUT | `/api/files/:name` | 更新文件内容 |
-| DELETE | `/api/files/:name` | 删除文件 |
-| POST | `/api/metadata` | Hook 脚本调用，记录元数据 |
+| GET | `/api/knowledge` | 列出知识库文档（按项目分组） |
+| GET | `/api/knowledge/file` | 读取单个 .md 文件内容 |
+| PUT | `/api/knowledge/file` | 保存编辑（写回原始文件） |
+| GET | `/api/knowledge/view` | 渲染好的 HTML 页面（新窗口打开用） |
+| GET | `/api/knowledge/config` | 读取知识库根目录配置 |
+| POST | `/api/knowledge/config` | 更新知识库根目录配置 |
+| POST | `/api/knowledge/preview` | 预览根目录扫描结果 |
+| GET | `/api/courses` | 列出课程 workspace 及其课程/速查卡 |
+| GET | `/api/courses/config` | 读取课程根目录配置 |
+| POST | `/api/courses/config` | 更新课程根目录配置 |
+| POST | `/api/courses/preview` | 预览根目录扫描结果 |
+| GET | `/teach/:wsId/*` | 托管课程 workspace 文件（HTML/CSS/JS） |
+
+WebSocket 推送 `knowledge-change` / `course-change` 事件，前端自动刷新。
 
 ## 技术栈
 
-- **后端**: Express 5 + ws + chokidar
-- **前端**: 原生 HTML/CSS/JS + marked + highlight.js
+- **后端**：Express 5 + ws + chokidar + marked
+- **前端**：原生 HTML/CSS/JS + marked + highlight.js
+- **部署**：PM2

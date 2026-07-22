@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Markdown 文档查看器</title>
+<title>知识库</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" id="hljs-light">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-dark" disabled>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
@@ -112,6 +112,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .status-dot.connected { background: #2ea043; }
 .status-dot.disconnected { background: var(--danger); }
 
+/* 视图切换 tab */
+.view-tabs { display: flex; gap: 4px; }
+.view-tab { background: none; border: none; padding: 4px 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border-radius: 6px; transition: all 0.15s; white-space: nowrap; }
+.view-tab:hover { background: var(--bg-tertiary); }
+.view-tab.active { color: var(--accent); background: var(--bg-tertiary); }
+
+/* 课程列表 */
+.course-workspace { margin-bottom: 8px; }
+.ws-header { padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.3px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border); cursor: pointer; user-select: none; }
+.ws-header:first-child { border-top: none; }
+.ws-header:hover { background: var(--bg-tertiary); }
+.ws-header .collapse-icon { font-size: 10px; transition: transform 0.15s; display: inline-block; }
+.ws-header .collapse-icon.collapsed { transform: rotate(-90deg); }
+.ws-header .ws-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-header .file-count { font-weight: 400; color: var(--text-secondary); opacity: 0.7; }
+.course-group-label { padding: 4px 12px 2px; font-size: 10px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; }
+
+/* iframe 课程展示 */
+.course-frame { flex: 1; border: none; width: 100%; background: #fff; }
+
 /* 通知 */
 .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg-secondary); border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; animation: slideIn 0.3s ease; }
 @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -121,14 +141,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 
 <div class="sidebar">
   <div class="sidebar-header">
-    <h1>MD Docs</h1>
+    <div class="view-tabs">
+      <button class="view-tab active" onclick="switchView('docs')" id="tab-docs">📚 知识库</button>
+      <button class="view-tab" onclick="switchView('courses')" id="tab-courses">🎓 课程</button>
+    </div>
     <div class="sidebar-actions">
-      <button class="icon-btn" onclick="showNewFileDialog()" title="新建文件">+</button>
+      <button class="icon-btn" onclick="showNewFileDialog()" title="新建文件" id="action-newfile">+</button>
+      <button class="icon-btn" onclick="openSettings()" title="根目录设置" id="action-courses">⚙</button>
       <button class="icon-btn" onclick="toggleTheme()" title="切换主题" id="theme-btn">🌙</button>
       <button class="icon-btn" onclick="toggleSidebar()" title="收起侧边栏">◀</button>
     </div>
   </div>
   <div class="file-list" id="file-list"></div>
+  <div class="file-list" id="course-list" style="display:none"></div>
   <div style="padding:8px 12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-secondary);display:flex;align-items:center;">
     <span class="status-dot" id="ws-status"></span>
     <span id="ws-text">连接中...</span>
@@ -146,11 +171,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
     <button class="btn" id="edit-btn" onclick="toggleEdit()">编辑</button>
     <button class="btn btn-primary" id="save-btn" onclick="saveFile()" style="display:none">保存</button>
     <button class="btn" id="cancel-btn" onclick="cancelEdit()" style="display:none">取消</button>
+    <button class="btn" id="open-btn" onclick="openCourseInNewTab()" style="display:none">↗ 新窗口打开</button>
   </div>
   <div class="content" id="content">
     <div class="empty-state">
       <div style="font-size:40px">📄</div>
-      <div>选择一个文件或新建文档开始</div>
+      <div>选择一个文件或新建知识库开始</div>
     </div>
   </div>
 </div>
@@ -229,11 +255,16 @@ function connectWS() {
   };
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data);
-    if (data.type === 'file-change') {
-      loadFileList();
-      if (currentFile === data.name && !isEditing) {
-        loadFile(data.name);
-        showToast(`${data.name} 已更新`);
+    if (data.type === 'knowledge-change') {
+      if (currentView === 'docs') loadFileList();
+      if (currentFile && !isEditing) { loadFile(currentFile); showToast('文档已更新'); }
+    } else if (data.type === 'course-change') {
+      if (currentView === 'courses') loadCourseList();
+      // 若当前正在查看的课程文件被改动，刷新 iframe
+      if (currentCourse) {
+        const frame = document.getElementById('course-frame');
+        if (frame) frame.src = frame.src;
+        showToast('课程已更新');
       }
     }
   };
@@ -241,38 +272,53 @@ function connectWS() {
 connectWS();
 
 // 文件列表（按对话分组）
+// 知识库文件唯一标识：root || relPath（用 || 分隔，root 是绝对路径）
+function kbKey(root, relPath) { return root + '||' + relPath; }
+function parseKbKey(key) { const i = key.indexOf('||'); return { root: key.slice(0, i), relPath: key.slice(i + 2) }; }
+
 async function loadFileList() {
-  const res = await fetch('/api/files');
+  const res = await fetch('/api/knowledge');
   const data = await res.json();
   const list = document.getElementById('file-list');
   const groups = data.groups || [];
-  fileDataCache = data.files || [];
+  // 缓存所有文件用于标题查找
+  fileDataCache = [];
+  groups.forEach(g => g.files.forEach(f => fileDataCache.push({ key: kbKey(g.root, f.relPath), title: f.title, relPath: f.relPath, project: g.project })));
 
   if (groups.length === 0) {
-    list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:13px">暂无文档</div>';
+    list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:13px;text-align:center">暂无知识库内容<br><span style="font-size:11px;opacity:0.7">点击右上角 ⚙ 添加知识库根目录</span></div>';
     return;
   }
 
-  list.innerHTML = groups.map((group, gi) => {
-    const sessionLabel = formatSessionLabel(group);
-    const isCollapsed = collapsedSessions.has(group.sessionId || '__ungrouped__');
-    const files = group.files.map(f => `
-      <div class="file-item ${f.name === currentFile ? 'active' : ''}" onclick="loadFile('${f.name}')" title="${f.name}${f.sourcePath ? '\n' + f.sourcePath : ''}">
-        <span class="file-name">${escapeHtml(f.title || f.name)}</span>
-        <button class="delete-btn" onclick="event.stopPropagation();deleteFile('${f.name}')" title="删除">×</button>
-      </div>
-    `).join('');
+  list.innerHTML = groups.map(group => {
+    const isCollapsed = collapsedFolders.has(group.project);
+    const files = group.files.map(f => {
+      const key = kbKey(group.root, f.relPath);
+      return `
+      <div class="file-item ${key === currentFile ? 'active' : ''}" onclick="loadFile('${escapeAttr(key)}')" title="${escapeHtml(f.relPath)}">
+        <span class="file-name">${escapeHtml(f.title)}</span>
+      </div>`;
+    }).join('');
 
     return `
-      <div class="session-group">
-        <div class="session-header" onclick="toggleSessionCollapse('${group.sessionId || '__ungrouped__'}')">
+      <div class="course-workspace">
+        <div class="ws-header" onclick="toggleFolderCollapse('${escapeAttr(group.project)}')" title="折叠/展开">
           <span class="collapse-icon ${isCollapsed ? 'collapsed' : ''}">▼</span>
-          <span class="session-label">${sessionLabel}</span>
+          <span class="ws-name">📁 ${escapeHtml(group.project)}</span>
           <span class="file-count">${group.files.length}</span>
         </div>
         <div class="session-files ${isCollapsed ? 'collapsed' : ''}">${files}</div>
       </div>`;
   }).join('');
+}
+
+// 文件夹折叠状态
+const collapsedFolders = new Set();
+
+function toggleFolderCollapse(folder) {
+  if (collapsedFolders.has(folder)) collapsedFolders.delete(folder);
+  else collapsedFolders.add(folder);
+  loadFileList();
 }
 
 // 会话分组折叠状态
@@ -308,20 +354,25 @@ function formatSessionLabel(group) {
   return `${dateStr} ${time} #${shortId}`;
 }
 
-// 加载文件
-async function loadFile(name) {
+// 加载文件（直接从外部原始位置读取）
+async function loadFile(key) {
   if (isEditing) return;
-  currentFile = name;
-  const res = await fetch(`/api/files/${encodeURIComponent(name)}`);
+  currentFile = key;
+  const { root, relPath } = parseKbKey(key);
+  const res = await fetch(`/api/knowledge/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`);
+  if (!res.ok) { showToast('文件读取失败'); return; }
   const data = await res.json();
   originalContent = data.content;
 
   document.getElementById('toolbar').style.display = 'flex';
   document.getElementById('toolbar-always').style.display = 'none';
-  // 用缓存的标题或从内容中提取
-  const cached = fileDataCache.find(f => f.name === name);
-  const displayTitle = cached ? cached.title : name;
-  document.getElementById('file-title').textContent = displayTitle;
+  // 知识库文件：显示编辑 + 新窗口打开
+  document.getElementById('edit-btn').style.display = '';
+  document.getElementById('save-btn').style.display = 'none';
+  document.getElementById('cancel-btn').style.display = 'none';
+  document.getElementById('open-btn').style.display = '';
+  const cached = fileDataCache.find(f => f.key === key);
+  document.getElementById('file-title').textContent = cached ? cached.title : relPath;
 
   // 更新侧边栏展开按钮可见性
   const sidebarCollapsed = document.querySelector('.sidebar').classList.contains('collapsed');
@@ -369,11 +420,13 @@ function cancelEdit() {
 
 async function saveFile() {
   const text = document.getElementById('editor').value;
-  await fetch(`/api/files/${encodeURIComponent(currentFile)}`, {
+  const { root, relPath } = parseKbKey(currentFile);
+  const res = await fetch('/api/knowledge/file', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: text }),
+    body: JSON.stringify({ root, path: relPath, content: text }),
   });
+  if (!res.ok) { showToast('保存失败'); return; }
   originalContent = text;
   isEditing = false;
   document.getElementById('edit-btn').style.display = '';
@@ -383,13 +436,16 @@ async function saveFile() {
   showToast('已保存');
 }
 
+// 知识库文件由文件系统管理，不支持从网页删除
+function deleteFile() { showToast('知识库文件请在文件系统中管理'); }
+
 // 新建文件
 function showNewFileDialog() {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
     <div class="dialog">
-      <h3>新建文档</h3>
+      <h3>新建知识库文档</h3>
       <input type="text" id="new-file-name" placeholder="文件名 (例如: notes.md)" autofocus>
       <div class="dialog-actions">
         <button class="btn" onclick="this.closest('.dialog-overlay').remove()">取消</button>
@@ -429,7 +485,7 @@ async function deleteFile(name) {
     currentFile = null;
     isEditing = false;
     document.getElementById('toolbar').style.display = 'none';
-    document.getElementById('content').innerHTML = '<div class="empty-state"><div style="font-size:40px">📄</div><div>选择一个文件或新建文档开始</div></div>';
+    document.getElementById('content').innerHTML = '<div class="empty-state"><div style="font-size:40px">📚</div><div>选择一个文件或新建知识库开始</div></div>';
   }
   loadFileList();
   showToast('已删除');
@@ -450,8 +506,380 @@ function showToast(msg) {
   setTimeout(() => toast.remove(), 3000);
 }
 
+// ============================================================
+// 课程视图（/teach 生成的 HTML 课程网页）
+// ============================================================
+let currentView = 'docs';
+let currentCourse = null;   // { wsId, kind, file, title }
+let courseDataCache = [];   // 缓存课程列表数据
+// 课程列表折叠状态：workspace 折叠 + 子分组（课程/速查卡）折叠
+const collapsedCourseWs = new Set();
+const collapsedCourseGroups = new Set();
+
+// 视图切换：文档 / 课程
+function switchView(view) {
+  currentView = view;
+  document.getElementById('tab-docs').classList.toggle('active', view === 'docs');
+  document.getElementById('tab-courses').classList.toggle('active', view === 'courses');
+  document.getElementById('file-list').style.display = view === 'docs' ? '' : 'none';
+  document.getElementById('course-list').style.display = view === 'courses' ? '' : 'none';
+  // 右上角操作按钮
+  document.getElementById('action-newfile').style.display = 'none';
+  document.getElementById('action-courses').style.display = '';
+  if (view === 'courses') loadCourseList();
+  else loadFileList();
+}
+
+// 加载课程列表
+async function loadCourseList() {
+  const res = await fetch('/api/courses');
+  const data = await res.json();
+  const list = document.getElementById('course-list');
+  const workspaces = data.workspaces || [];
+  courseDataCache = workspaces;
+
+  if (workspaces.length === 0) {
+    list.innerHTML = `<div class="empty-state" style="padding:20px;font-size:14px;text-align:center;gap:16px">
+      <div style="font-size:40px">🎓</div>
+      <div>还没有任何课程</div>
+      <button class="btn btn-primary" style="margin-top:4px" onclick="showCourseConfigDialog()">⚙ 添加课程根目录</button>
+      <div style="font-size:11px;opacity:0.6">根目录下含 <code>lessons/</code> 的子文件夹会自动识别为课程</div>
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = workspaces.map(ws => {
+    const lessonsHtml = (ws.lessons || []).map(f => {
+      const active = currentCourse && currentCourse.wsId === ws.id && currentCourse.kind === 'lessons' && currentCourse.file === f.file;
+      return `<div class="file-item ${active ? 'active' : ''}" style="padding-left:24px" onclick="openCourse('${escapeAttr(ws.id)}','lessons','${escapeAttr(f.file)}')" title="${escapeHtml(f.title)}">
+        <span class="file-name">${escapeHtml(f.title)}</span>
+      </div>`;
+    }).join('');
+    const refHtml = (ws.reference || []).map(f => {
+      const active = currentCourse && currentCourse.wsId === ws.id && currentCourse.kind === 'reference' && currentCourse.file === f.file;
+      return `<div class="file-item ${active ? 'active' : ''}" style="padding-left:24px" onclick="openCourse('${escapeAttr(ws.id)}','reference','${escapeAttr(f.file)}')" title="${escapeHtml(f.title)}">
+        <span class="file-name">${escapeHtml(f.title)}</span>
+      </div>`;
+    }).join('');
+
+    const total = (ws.lessons?.length || 0) + (ws.reference?.length || 0);
+    const wsCollapsed = collapsedCourseWs.has(ws.id);
+    let inner = `<div class="ws-header" onclick="toggleCourseWs('${escapeAttr(ws.id)}')" title="折叠/展开">
+      <span class="collapse-icon ${wsCollapsed ? 'collapsed' : ''}">▼</span>
+      <span class="ws-name">📚 ${escapeHtml(ws.name)}</span>
+      <span class="file-count">${total}</span>
+    </div>`;
+    if (!wsCollapsed) {
+      inner += renderCourseGroup(ws.id, 'lessons', '课程', ws.lessons, lessonsHtml);
+      inner += renderCourseGroup(ws.id, 'reference', '速查卡', ws.reference, refHtml);
+    }
+    return `<div class="course-workspace">${inner}</div>`;
+  }).join('');
+}
+
+// 渲染课程/速查卡子分组（可折叠，复用文档视图的 session-group 样式）
+function renderCourseGroup(wsId, kind, label, files, filesHtml) {
+  if (!files || !files.length) return '';
+  const key = wsId + '|' + kind;
+  const collapsed = collapsedCourseGroups.has(key);
+  return `<div class="session-group">
+    <div class="session-header" onclick="toggleCourseGroup('${escapeAttr(key)}')">
+      <span class="collapse-icon ${collapsed ? 'collapsed' : ''}">▼</span>
+      <span class="session-label">${label}</span>
+      <span class="file-count">${files.length}</span>
+    </div>
+    <div class="session-files ${collapsed ? 'collapsed' : ''}">${filesHtml}</div>
+  </div>`;
+}
+
+// 折叠/展开 workspace
+function toggleCourseWs(id) {
+  if (collapsedCourseWs.has(id)) collapsedCourseWs.delete(id);
+  else collapsedCourseWs.add(id);
+  loadCourseList();
+}
+
+// 折叠/展开 子分组（课程/速查卡）
+function toggleCourseGroup(key) {
+  if (collapsedCourseGroups.has(key)) collapsedCourseGroups.delete(key);
+  else collapsedCourseGroups.add(key);
+  loadCourseList();
+}
+
+// 打开课程（用 iframe 展示，保持相对路径引用）
+// title 不由 onclick 传入（避免引号转义问题），改为从已缓存的课程列表查
+function openCourse(wsId, kind, file) {
+  const ws = courseDataCache.find(w => w.id === wsId);
+  const item = ws ? (ws[kind] || []).find(f => f.file === file) : null;
+  const title = item ? item.title : file;
+  currentCourse = { wsId, kind, file, title };
+  isEditing = false;
+  const src = `/teach/${encodeURIComponent(wsId)}/${kind}/${encodeURIComponent(file)}`;
+
+  document.getElementById('toolbar').style.display = 'flex';
+  document.getElementById('toolbar-always').style.display = 'none';
+  document.getElementById('edit-btn').style.display = 'none';
+  document.getElementById('save-btn').style.display = 'none';
+  document.getElementById('cancel-btn').style.display = 'none';
+  document.getElementById('open-btn').style.display = '';
+  document.getElementById('file-title').textContent = title;
+
+  const sidebarCollapsed = document.querySelector('.sidebar').classList.contains('collapsed');
+  document.getElementById('sidebar-open-btn').style.display = sidebarCollapsed ? '' : 'none';
+
+  document.getElementById('content').innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(src)}"></iframe>`;
+  loadCourseList();
+}
+
+function openCourseInNewTab() {
+  // 知识库：在新标签页打开渲染好的 HTML
+  if (currentView === 'docs' && currentFile) {
+    const { root, relPath } = parseKbKey(currentFile);
+    const url = `/api/knowledge/view?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
+    window.open(url, '_blank');
+    return;
+  }
+  // 课程
+  if (!currentCourse) return;
+  const { wsId, kind, file } = currentCourse;
+  window.open(`/teach/${encodeURIComponent(wsId)}/${kind}/${encodeURIComponent(file)}`, '_blank');
+}
+
+// 课程根目录配置对话框
+async function showCourseConfigDialog() {
+  let cfg = { roots: [] };
+  try {
+    const res = await fetch('/api/courses/config');
+    cfg = await res.json();
+  } catch {}
+  const roots = cfg.roots || [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog" style="min-width:480px">
+      <h3>⚙ 课程根目录</h3>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会扫描这些目录的下一级子文件夹，自动发现含 <code>lessons/</code> 的教学 workspace。</div>
+      <div id="roots-list" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:6px;margin-bottom:16px">
+        <input type="text" id="new-root" placeholder="例如 C:/Work/AI" style="flex:1;margin-bottom:0">
+        <button class="btn" onclick="addRootLine()">添加</button>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" onclick="this.closest('.dialog-overlay').remove()">取消</button>
+        <button class="btn btn-primary" onclick="saveRoots()">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  window._pendingRoots = [...roots];
+  renderRootsList();
+  refreshRootPreview();
+
+  overlay.querySelector('#new-root').addEventListener('keydown', e => { if (e.key === 'Enter') addRootLine(); });
+}
+
+// 预览：调后端查看每个 root 发现了多少 workspace
+let _rootPreview = {};
+async function refreshRootPreview() {
+  const roots = window._pendingRoots || [];
+  _rootPreview = {};
+  if (!roots.length) { renderRootsList(); return; }
+  try {
+    const res = await fetch('/api/courses/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roots }),
+    });
+    const data = await res.json();
+    (data.preview || []).forEach(p => { _rootPreview[p.root] = p; });
+  } catch {}
+  renderRootsList();
+}
+
+function renderRootsList() {
+  const el = document.getElementById('roots-list');
+  if (!el) return;
+  if (!window._pendingRoots.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0">尚未添加任何根目录</div>';
+    return;
+  }
+  el.innerHTML = window._pendingRoots.map((r, i) => {
+    const p = _rootPreview[r];
+    let badge;
+    if (!p) {
+      badge = '<span style="font-size:11px;color:var(--text-secondary)">检查中…</span>';
+    } else if (!p.exists) {
+      badge = '<span style="font-size:11px;color:var(--danger)" title="路径不存在">✗ 不存在</span>';
+    } else if (!p.workspaces.length) {
+      badge = '<span style="font-size:11px;color:var(--text-secondary)" title="下一级没有含 lessons/ 的子文件夹">0 个课程目录</span>';
+    } else {
+      badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.workspaces.join(', '))}">✓ ${p.workspaces.length} 个 · ${escapeHtml(p.workspaces.join(', '))}</span>`;
+    }
+    return `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-secondary)">
+      <span style="flex:1;font-size:13px;font-family:monospace;word-break:break-all">${escapeHtml(r)}</span>
+      ${badge}
+      <button class="delete-btn" style="opacity:1" onclick="removeRootLine(${i})" title="移除">×</button>
+    </div>`;
+  }).join('');
+}
+
+function addRootLine() {
+  const input = document.getElementById('new-root');
+  const v = input.value.trim();
+  if (!v) return;
+  if (!window._pendingRoots.includes(v)) {
+    window._pendingRoots.push(v);
+    input.value = '';
+    renderRootsList();
+    refreshRootPreview();
+  } else {
+    input.value = '';
+    showToast('该根目录已添加');
+  }
+}
+
+function removeRootLine(i) {
+  window._pendingRoots.splice(i, 1);
+  renderRootsList();
+  refreshRootPreview();
+}
+
+async function saveRoots() {
+  const roots = window._pendingRoots || [];
+  const res = await fetch('/api/courses/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roots }),
+  });
+  document.querySelector('.dialog-overlay')?.remove();
+  if (res.ok) {
+    await loadCourseList();
+    showToast('已保存课程配置');
+  } else {
+    const err = await res.json().catch(() => ({}));
+    showToast(err.error || '保存失败');
+  }
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/'/g, "\\'");
+}
+
+// ⚙ 设置入口：根据当前视图打开对应配置
+function openSettings() {
+  if (currentView === 'courses') showCourseConfigDialog();
+  else showKnowledgeConfigDialog();
+}
+
+// 知识库根目录配置对话框（和课程配置对称）
+let _kbPreview = {};
+async function showKnowledgeConfigDialog() {
+  let cfg = { roots: [] };
+  try {
+    const res = await fetch('/api/knowledge/config');
+    cfg = await res.json();
+  } catch {}
+  const roots = cfg.roots || [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog" style="min-width:520px">
+      <h3>⚙ 知识库根目录</h3>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录下的 <code>.md</code> 文件（排除 node_modules/.git/bin 等），按项目文件夹分组。文件保持原位，不复制。</div>
+      <div id="kb-roots-list" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:6px;margin-bottom:16px">
+        <input type="text" id="kb-new-root" placeholder="例如 C:/Work 或 C:/Work/AI" style="flex:1;margin-bottom:0">
+        <button class="btn" onclick="kbAddRoot()">添加</button>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" onclick="this.closest('.dialog-overlay').remove()">取消</button>
+        <button class="btn btn-primary" onclick="kbSave()">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  window._kbPendingRoots = [...roots];
+  kbRenderList();
+  kbRefreshPreview();
+
+  overlay.querySelector('#kb-new-root').addEventListener('keydown', e => { if (e.key === 'Enter') kbAddRoot(); });
+}
+
+async function kbRefreshPreview() {
+  _kbPreview = {};
+  const roots = window._kbPendingRoots || [];
+  if (!roots.length) { kbRenderList(); return; }
+  try {
+    const res = await fetch('/api/knowledge/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roots }),
+    });
+    const data = await res.json();
+    (data.preview || []).forEach(p => { _kbPreview[p.root] = p; });
+  } catch {}
+  kbRenderList();
+}
+
+function kbRenderList() {
+  const el = document.getElementById('kb-roots-list');
+  if (!el) return;
+  if (!window._kbPendingRoots.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:8px 0">尚未添加任何根目录</div>';
+    return;
+  }
+  el.innerHTML = window._kbPendingRoots.map((r, i) => {
+    const p = _kbPreview[r];
+    let badge;
+    if (!p) badge = '<span style="font-size:11px;color:var(--text-secondary)">检查中…</span>';
+    else if (!p.exists) badge = '<span style="font-size:11px;color:var(--danger)">✗ 不存在</span>';
+    else if (!p.mdCount) badge = '<span style="font-size:11px;color:var(--text-secondary)">0 个 .md</span>';
+    else badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.projects.join(', '))}">✓ ${p.mdCount} 个 · ${escapeHtml(p.projects.slice(0,3).join(', '))}${p.projects.length>3?'…':''}</span>`;
+    return `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-secondary)">
+      <span style="flex:1;font-size:13px;font-family:monospace;word-break:break-all">${escapeHtml(r)}</span>
+      ${badge}
+      <button class="delete-btn" style="opacity:1" onclick="kbRemoveRoot(${i})" title="移除">×</button>
+    </div>`;
+  }).join('');
+}
+
+function kbAddRoot() {
+  const input = document.getElementById('kb-new-root');
+  const v = input.value.trim();
+  if (!v) return;
+  if (!window._kbPendingRoots.includes(v)) {
+    window._kbPendingRoots.push(v);
+    input.value = '';
+    kbRenderList();
+    kbRefreshPreview();
+  } else { input.value = ''; showToast('该根目录已添加'); }
+}
+
+function kbRemoveRoot(i) {
+  window._kbPendingRoots.splice(i, 1);
+  kbRenderList();
+  kbRefreshPreview();
+}
+
+async function kbSave() {
+  const roots = window._kbPendingRoots || [];
+  const res = await fetch('/api/knowledge/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roots }),
+  });
+  document.querySelector('.dialog-overlay')?.remove();
+  if (res.ok) { await loadFileList(); showToast('已保存知识库配置'); }
+  else { const err = await res.json().catch(() => ({})); showToast(err.error || '保存失败'); }
+}
+
 // 初始化
 loadFileList();
+switchView('docs');
 </script>
 </body>
 </html>

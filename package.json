@@ -1,13 +1,25 @@
 {
-  "name": "claudetools",
-  "version": "1.0.0",
-  "description": "",
+  "name": "claudemd-tools",
+  "version": "1.1.0",
+  "description": "本地知识库 + 课程查看器：直接读取外部文件夹的 .md / HTML 课程，按项目分类，实时更新，在线编辑",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "npx nodemon server.js"
+    "dev": "npx nodemon server.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop claudemd",
+    "pm2:restart": "pm2 restart claudemd",
+    "pm2:logs": "pm2 logs claudemd",
+    "pm2:save": "pm2 save"
   },
-  "keywords": [],
+  "keywords": [
+    "markdown",
+    "knowledge-base",
+    "teaching",
+    "course-viewer",
+    "express",
+    "claude-code"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
