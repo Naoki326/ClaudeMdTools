@@ -311,7 +311,7 @@ function renderKbRoot(r) {
   return `<div class="course-workspace">
     <div class="ws-header" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
       <span class="collapse-icon ${isCollapsed ? 'collapsed' : ''}">▼</span>
-      <span class="ws-name">📂 ${escapeHtml(r.name)}</span>
+      <span class="ws-name">🗄️ ${escapeHtml(r.name)}</span>
       <span class="file-count">${fileCount}</span>
     </div>
     <div class="session-files ${isCollapsed ? 'collapsed' : ''}">
