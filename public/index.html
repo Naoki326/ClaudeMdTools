@@ -488,8 +488,9 @@ function formatSessionLabel(group) {
 }
 
 // 加载文件（直接从外部原始位置读取）
-async function loadFile(key) {
+async function loadFile(key, fromHistory) {
   if (isEditing) return;
+  const isReload = (key === currentFile);
   currentFile = key;
   const { root, relPath } = parseKbKey(key);
   const res = await fetch(`/api/knowledge/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`);
@@ -516,6 +517,11 @@ async function loadFile(key) {
   // 渲染 mermaid 图表（若文档中有）
   if (window.mermaid && content.querySelector('.mermaid')) {
     try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
+  }
+
+  // 浏览器历史：导航时压入历史栈，重载/后退恢复时不重复压入
+  if (!fromHistory && !isReload) {
+    history.pushState({ kbKey: key }, '', '#kbdoc=' + encodeURIComponent(key));
   }
 
   loadFileList();
@@ -1063,9 +1069,25 @@ function handleKbLinkClick(e) {
 }
 
 // 初始化
-loadFileList();
-switchView('docs');
-document.getElementById('content').addEventListener('click', handleKbLinkClick);
+(async () => {
+  await loadFileList();
+  switchView('docs');
+  document.getElementById('content').addEventListener('click', handleKbLinkClick);
+  // 页面刷新后：从 URL hash 恢复上次查看的文档
+  const m = location.hash.match(/^#kbdoc=(.+)$/);
+  if (m) {
+    const key = decodeURIComponent(m[1]);
+    try { loadFile(key, true); } catch {}
+  }
+})();
+
+// 浏览器后退/前进：从历史状态恢复文档
+window.addEventListener('popstate', (e) => {
+  const key = (e.state && e.state.kbKey) || null;
+  if (key) {
+    loadFile(key, true);
+  }
+});
 </script>
 </body>
 </html>
