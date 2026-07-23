@@ -589,6 +589,71 @@ app.put('/api/knowledge/file', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================================
+// /kb/* -- 简洁路径式 API，供 AI 直接 URL 访问知识库
+// ============================================================
+// 用法：
+//   GET /kb                    -> 列出所有文档路径（纯文本，一行一个）
+//   GET /kb/<project>          -> 只列出某项目下的文档路径
+//   GET /kb/<project>/<path>   -> 返回 .md 原文（text/plain）
+// 示例：
+//   GET /kb/weldone/README.md
+//   GET /kb/weldone/openspec/specs/xxx/spec.md
+
+app.get('/kb', (req, res) => {
+  try {
+    const roots = discoverKnowledge();
+    const lines = [];
+    function walkTree(nodes, prefix) {
+      for (const n of nodes) {
+        const p = prefix ? prefix + '/' + n.name : n.name;
+        if (n.type === 'file') lines.push('/kb/' + p);
+        else if (n.type === 'dir') walkTree(n.children, p);
+      }
+    }
+    roots.forEach(r => walkTree(r.children, r.name));
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(lines.join('\n'));
+  } catch (err) { res.status(500).send(err.message); }
+});
+
+app.use('/kb/', (req, res, next) => {
+  try {
+    const rel = decodeURIComponent(req.path).replace(/^\/+/, ''); // 去掉开头斜杠
+    if (!rel) { res.status(404).send('需要指定路径: /kb/<project> 或 /kb/<project>/<path>'); return; }
+    const slashIdx = rel.indexOf('/');
+    if (slashIdx === -1) {
+      // /kb/<project> -> 列出该项目下所有文件路径
+      const roots = discoverKnowledge();
+      const root = roots.find(r => r.name === rel);
+      if (!root) { res.status(404).send('项目不存在: ' + rel); return; }
+      const lines = [];
+      function walk(nodes, prefix) {
+        for (const n of nodes) {
+          const p = prefix ? prefix + '/' + n.name : n.name;
+          if (n.type === 'file') lines.push('/kb/' + root.name + '/' + p);
+          else if (n.type === 'dir') walk(n.children, p);
+        }
+      }
+      walk(root.children, '');
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.send(lines.join('\n'));
+      return;
+    }
+    // /kb/<project>/<path...> -> 返回 .md 原文
+    const projectName = rel.slice(0, slashIdx);
+    const filePath = rel.slice(slashIdx + 1);
+    const roots = discoverKnowledge();
+    const root = roots.find(r => r.name === projectName);
+    if (!root) { res.status(404).send('项目不存在: ' + projectName); return; }
+    const abs = resolveKnowledgePath(root.path, filePath);
+    if (!abs) { res.status(400).send('无效路径'); return; }
+    const content = fs.readFileSync(abs, 'utf-8');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(content);
+  } catch { res.status(404).send('文件不存在'); }
+});
+
 // HTTP + WebSocket 共享同一端口
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
