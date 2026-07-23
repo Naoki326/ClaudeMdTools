@@ -147,12 +147,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .tree-item.tree-root::before { display: none; }
 .tree-item.tree-root > .tree-row::before { display: none; }
 /* 折叠指示器 */
-.tree-toggle { width: 14px; text-align: center; flex-shrink: 0; color: var(--text-secondary); font-size: 10px; transition: transform 0.15s; display: inline-block; }
-.tree-toggle.collapsed { transform: rotate(-90deg); }
-.tree-row { position: relative; display: flex; align-items: center; gap: 4px; padding: 4px 8px; cursor: pointer; user-select: none; }
+/* 子目录不显示折叠箭头，整行点击即可折叠/展开；仅根节点保留大三角形 */
+.tree-toggle { display: none; }
+.tree-row { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px; cursor: pointer; user-select: none; font-size: 14px; }
 .tree-row:hover { background: var(--bg-tertiary); }
-.tree-row .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.tree-row .tree-count { font-weight: 400; color: var(--text-secondary); opacity: 0.6; font-size: 11px; }
+.tree-row .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row .tree-count { font-weight: 400; color: var(--text-secondary); opacity: 0.6; font-size: 12px; }
+/* 根节点：大三角形 + 粗体 */
+.tree-row.tree-root-row { padding: 8px 12px; font-weight: 700; font-size: 14px; }
+.tree-row.tree-root-row .root-toggle { display: inline-block; width: 14px; text-align: center; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; transition: transform 0.15s; }
+.tree-row.tree-root-row .root-toggle.collapsed { transform: rotate(-90deg); }
 .tree-row.file { cursor: pointer; }
 .tree-row.file .tree-label { font-weight: 400; }
 .tree-row.file.active { background: var(--accent); color: #fff; }
@@ -231,11 +235,46 @@ function toggleSidebar() {
   localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '');
 }
 
-// 初始化侧边栏状态
+// 初始化侧边栏状态 + 拖拽调宽
 (function initSidebar() {
+  // 恢复宽度
+  const savedW = localStorage.getItem('sidebar-w');
+  if (savedW) document.documentElement.style.setProperty('--sidebar-w', savedW + 'px');
+  // 恢复折叠状态
   if (localStorage.getItem('sidebar-collapsed') === '1') {
     document.querySelector('.sidebar').classList.add('collapsed');
     document.getElementById('toolbar-always').style.display = 'flex';
+  }
+  // 拖拽调整宽度
+  const resizer = document.getElementById('sidebar-resizer');
+  if (resizer) {
+    let dragging = false, startX = 0, startW = 0;
+    resizer.addEventListener('mousedown', (e) => {
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar.classList.contains('collapsed')) return; // 收起时不拖
+      dragging = true;
+      startX = e.clientX;
+      startW = sidebar.offsetWidth;
+      resizer.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      let w = startW + (e.clientX - startX);
+      w = Math.max(180, Math.min(600, w)); // 限制范围
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'));
+      localStorage.setItem('sidebar-w', String(w));
+    });
   }
 })();
 
@@ -340,8 +379,8 @@ function renderKbRoot(r) {
   const isCollapsed = !expandedFolders.has(r.path);
   const fileCount = countFiles(r.children);
   return `<div class="tree-item tree-root">
-    <div class="tree-row" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
-      <span class="tree-toggle ${isCollapsed ? 'collapsed' : ''}">▾</span>
+    <div class="tree-row tree-root-row" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
+      <span class="root-toggle ${isCollapsed ? 'collapsed' : ''}">▼</span>
       <span class="tree-label">📚 ${escapeHtml(r.name)}</span>
       <span class="tree-count">${fileCount}</span>
     </div>
@@ -363,7 +402,6 @@ function renderKbChildren(children, rootPath, parentPath, depth) {
       const pad = 14 + (depth - 1) * 16;
       html += `<div class="tree-item" style="--tree-pad:${pad}px">
         <div class="tree-row" style="padding-left:${pad + 10}px" onclick="toggleFolderCollapse('${escapeAttr(key)}')" title="${escapeHtml(nodePath)}">
-          <span class="tree-toggle ${isCollapsed ? 'collapsed' : ''}">▾</span>
           <span class="tree-label">📁 ${escapeHtml(n.name)}</span>
           <span class="tree-count">${fileCount}</span>
         </div>
@@ -376,7 +414,6 @@ function renderKbChildren(children, rootPath, parentPath, depth) {
       const pad = 14 + depth * 16;
       html += `<div class="tree-item" style="--tree-pad:${pad}px">
         <div class="tree-row file ${fileKey === currentFile ? 'active' : ''}" style="padding-left:${pad + 10}px" onclick="loadFile('${escapeAttr(fileKey)}')" title="${escapeHtml(nodePath)}">
-          <span class="tree-toggle" style="visibility:hidden">▾</span>
           <span class="tree-label">📄 ${escapeHtml(n.title)}</span>
         </div>
       </div>`;
