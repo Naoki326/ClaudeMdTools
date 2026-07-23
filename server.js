@@ -399,6 +399,7 @@ const KB_EXCLUDED = new Set([
   'node_modules', '.git', '.svn', 'bin', 'obj', 'dist', 'build',
   '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea',
   'target', 'out', 'logs', '.cache', '.vs', 'packages', 'docs',
+  '.vscode', '.claude', '.husky', '.turbo', '.gradle',
 ]);
 
 function readKnowledgeConfig() {
@@ -425,7 +426,6 @@ function scanMarkdownFiles(dir, base, acc) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
-    if (e.name.startsWith('.')) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (KB_EXCLUDED.has(e.name.toLowerCase())) continue;
@@ -448,7 +448,6 @@ function scanTree(dir, base) {
   });
   const children = [];
   for (const e of entries) {
-    if (e.name.startsWith('.')) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (KB_EXCLUDED.has(e.name.toLowerCase())) continue;
@@ -710,7 +709,7 @@ function refreshKnowledgeWatcher() {
     ignored: (p) => {
       if (typeof p !== 'string' || !p) return false;
       const name = path.basename(p).toLowerCase();
-      return name.startsWith('.') || KB_EXCLUDED.has(name);
+      return KB_EXCLUDED.has(name);
     },
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
