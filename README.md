@@ -1,4 +1,4 @@
-# ClaudeMd Tools — 知识库 & 课程查看器
+# ClaudeMd Tools - 知识库 & 课程查看器
 
 一个本地 Web 应用，把散落在各项目文件夹里的 Markdown 文档和 HTML 课程**统一查看、分类、编辑**。直接读取原始文件，不复制、不移动；文件一改，网页实时刷新。
 
@@ -14,17 +14,18 @@
 
 - 配置若干**根目录**（如 `C:/Work`）
 - server 递归扫描这些目录下的所有 `.md` 文件（自动跳过 `node_modules`、`.git`、`bin`、`obj` 等）
-- 按**项目文件夹**（根目录下的一级子目录）分组，可折叠
+- 以配置的根目录为顶层，按**树形目录结构**展示，空文件夹自动隐藏
+- 多层折叠：根目录 / 子目录 / 文件，每层可独立展开收起，默认折叠
 - 点击文件在右侧查看渲染后的 Markdown，支持**在线编辑**（保存写回原始文件）
 - 支持**新窗口打开**（渲染好的独立 HTML 页面）
+- 文档间的相对 `.md` 链接可直接点击跳转
 
 ### 🎓 课程（HTML 教学网页）
 
 - 配置若干**根目录**（如 `C:/Work/AI`）
 - server 扫描根目录下含 `lessons/` 目录的子文件夹，识别为教学 workspace
 - 托管整个 workspace 目录树（`lessons/` + `reference/` + `assets/`），课程间的相对路径引用全部正常
-- 按 workspace 分组，课程 / 速查卡分类，可折叠
-- 点击课程在右侧 iframe 中展示（样式、交互脚本正常加载）
+- 按 workspace 分组，课程 / 速查卡分类，可折叠，默认折叠
 
 ## 快速开始
 
@@ -39,16 +40,32 @@ npm start
 
 ## 在网页里配置根目录
 
-知识库和课程各有独立的根目录配置，都在网页内通过 **⚙** 按钮管理：
+知识库和课程各有独立的根目录配置，都在网页内通过 **⚙** 按钮管理（改完写回配置文件，立即生效）：
 
 | 视图 | 配置文件 | 扫描规则 |
 |------|---------|---------|
-| 知识库 | `knowledge.config.json` | 递归扫描所有 `.md`，按一级子目录（项目）分组 |
+| 知识库 | `knowledge.config.json` | 递归扫描所有 `.md`，按目录树展示 |
 | 课程 | `teach.config.json` | 扫描一级子目录，含 `lessons/` 的识别为 workspace |
 
 配置对话框会**实时预览**每个根目录扫到了多少文件、哪些项目，加错路径立刻能看到（✗ 不存在 / 0 个）。
 
-配置示例：
+### 配置文件说明
+
+两个配置文件包含本地路径，**不提交到代码仓库**（已在 `.gitignore` 中忽略）。仓库里提供了模板：
+
+```
+knowledge.config.example.json   # 知识库根目录模板
+teach.config.example.json      # 课程根目录模板
+```
+
+克隆后复制为正式文件并填入你的路径：
+
+```bash
+cp knowledge.config.example.json knowledge.config.json
+cp teach.config.example.json teach.config.json
+```
+
+模板示例：
 ```json
 // knowledge.config.json
 { "roots": ["C:/Work"] }
@@ -56,6 +73,8 @@ npm start
 // teach.config.json
 { "roots": ["C:/Work/AI", "C:/Work/AnotherFSM"] }
 ```
+
+> 也可以不手动编辑文件——直接在网页里点 **⚙** 添加/删除根目录，会自动写入配置文件。
 
 ## 自动运行（PM2）
 
@@ -75,13 +94,15 @@ npm run pm2:save     # 保存进程快照（开机恢复用）
 
 ```
 ClaudeMdTools/
-├── server.js                 # Express + WebSocket 服务端
+├── server.js                       # Express + WebSocket 服务端
 ├── public/
-│   └── index.html            # 单页前端（知识库 / 课程 / 编辑 / 配置）
-├── ecosystem.config.cjs      # PM2 进程配置
-├── knowledge.config.json     # 知识库根目录配置
-├── teach.config.json         # 课程根目录配置
-├── DEPLOY.md                 # 部署运维说明
+│   └── index.html                  # 单页前端（知识库 / 课程 / 编辑 / 配置）
+├── ecosystem.config.cjs            # PM2 进程配置
+├── knowledge.config.example.json   # 知识库根目录配置模板
+├── teach.config.example.json       # 课程根目录配置模板
+├── knowledge.config.json           # 知识库根目录配置（本地，gitignore）
+├── teach.config.json               # 课程根目录配置（本地，gitignore）
+├── DEPLOY.md                       # 部署运维说明
 └── package.json
 ```
 
@@ -89,7 +110,7 @@ ClaudeMdTools/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/knowledge` | 列出知识库文档（按项目分组） |
+| GET | `/api/knowledge` | 列出知识库文档（树形结构） |
 | GET | `/api/knowledge/file` | 读取单个 .md 文件内容 |
 | PUT | `/api/knowledge/file` | 保存编辑（写回原始文件） |
 | GET | `/api/knowledge/view` | 渲染好的 HTML 页面（新窗口打开用） |

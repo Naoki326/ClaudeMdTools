@@ -2,9 +2,9 @@ node_modules/
 logs/
 *.log
 
-# 运行时生成的配置（如不想提交可取消注释）
-# teach.config.json
-# knowledge.config.json
+# 运行时配置（含本地路径，不提交；用 *.example.json 作模板）
+teach.config.json
+knowledge.config.json
 
 # Claude Code / IDE
 .claude/
