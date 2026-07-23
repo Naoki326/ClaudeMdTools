@@ -306,7 +306,7 @@ async function loadFileList() {
 
 // 渲染知识库树节点
 function renderKbRoot(r) {
-  const isCollapsed = collapsedFolders.has(r.path);
+  const isCollapsed = !expandedFolders.has(r.path);
   const fileCount = countFiles(r.children);
   return `<div class="course-workspace">
     <div class="ws-header" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
@@ -327,7 +327,7 @@ function renderKbChildren(children, rootPath, parentPath, depth) {
     const nodePath = (parentPath ? parentPath + '/' : '') + n.name;
     const key = rootPath + '/' + nodePath;
     if (n.type === 'dir') {
-      const isCollapsed = collapsedFolders.has(key);
+      const isCollapsed = !expandedFolders.has(key);
       const fileCount = countFiles(n.children);
       const pad = depth * 16;
       html += `<div class="course-workspace">
@@ -361,12 +361,12 @@ function countFiles(children) {
   return c;
 }
 
-// 文件夹折叠状态
-const collapsedFolders = new Set();
+// 文件夹展开状态（默认全部折叠）
+const expandedFolders = new Set();
 
 function toggleFolderCollapse(folder) {
-  if (collapsedFolders.has(folder)) collapsedFolders.delete(folder);
-  else collapsedFolders.add(folder);
+  if (expandedFolders.has(folder)) expandedFolders.delete(folder);
+  else expandedFolders.add(folder);
   loadFileList();
 }
 
@@ -561,9 +561,9 @@ function showToast(msg) {
 let currentView = 'docs';
 let currentCourse = null;   // { wsId, kind, file, title }
 let courseDataCache = [];   // 缓存课程列表数据
-// 课程列表折叠状态：workspace 折叠 + 子分组（课程/速查卡）折叠
-const collapsedCourseWs = new Set();
-const collapsedCourseGroups = new Set();
+// 课程列表展开状态（默认全部折叠）：workspace + 子分组
+const expandedCourseWs = new Set();
+const expandedCourseGroups = new Set();
 
 // 视图切换：文档 / 课程
 function switchView(view) {
@@ -612,7 +612,7 @@ async function loadCourseList() {
     }).join('');
 
     const total = (ws.lessons?.length || 0) + (ws.reference?.length || 0);
-    const wsCollapsed = collapsedCourseWs.has(ws.id);
+    const wsCollapsed = !expandedCourseWs.has(ws.id);
     let inner = `<div class="ws-header" onclick="toggleCourseWs('${escapeAttr(ws.id)}')" title="折叠/展开">
       <span class="collapse-icon ${wsCollapsed ? 'collapsed' : ''}">▼</span>
       <span class="ws-name">📚 ${escapeHtml(ws.name)}</span>
@@ -630,7 +630,7 @@ async function loadCourseList() {
 function renderCourseGroup(wsId, kind, label, files, filesHtml) {
   if (!files || !files.length) return '';
   const key = wsId + '|' + kind;
-  const collapsed = collapsedCourseGroups.has(key);
+  const collapsed = !expandedCourseGroups.has(key);
   return `<div class="session-group">
     <div class="session-header" onclick="toggleCourseGroup('${escapeAttr(key)}')">
       <span class="collapse-icon ${collapsed ? 'collapsed' : ''}">▼</span>
@@ -643,15 +643,15 @@ function renderCourseGroup(wsId, kind, label, files, filesHtml) {
 
 // 折叠/展开 workspace
 function toggleCourseWs(id) {
-  if (collapsedCourseWs.has(id)) collapsedCourseWs.delete(id);
-  else collapsedCourseWs.add(id);
+  if (expandedCourseWs.has(id)) expandedCourseWs.delete(id);
+  else expandedCourseWs.add(id);
   loadCourseList();
 }
 
 // 折叠/展开 子分组（课程/速查卡）
 function toggleCourseGroup(key) {
-  if (collapsedCourseGroups.has(key)) collapsedCourseGroups.delete(key);
-  else collapsedCourseGroups.add(key);
+  if (expandedCourseGroups.has(key)) expandedCourseGroups.delete(key);
+  else expandedCourseGroups.add(key);
   loadCourseList();
 }
 
