@@ -38,6 +38,8 @@ npm start
 
 浏览器打开 http://localhost:8080
 
+> **端口可配置**：默认 8080，通过环境变量 `PORT` 修改，如 `PORT=8090 npm start`。用 PM2 时改 `ecosystem.config.cjs` 里的 `env.PORT`。
+
 首次使用时知识库和课程可能没有内容——点击右上角 **⚙** 添加根目录即可。
 
 ## 在网页里配置根目录
