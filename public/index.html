@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-dark" disabled>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
 <style>
 :root {
   --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-tertiary: #e8ecf0;
@@ -278,17 +279,19 @@ function toggleSidebar() {
   }
 })();
 
-// marked 配置
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  },
-  breaks: true,
-  gfm: true,
-});
+// marked 配置：mermaid 代码块输出为 <div class="mermaid">，其他走 highlight.js
+const renderer = new marked.Renderer();
+renderer.code = function(code, lang) {
+  if (lang === 'mermaid') {
+    return '<div class="mermaid">' + escapeHtml(code) + '</div>';
+  }
+  // marked v12 会传第三个参数 escaped，但 highlight.js 需要原始 code
+  if (lang && hljs.getLanguage(lang)) {
+    return '<pre><code class="hljs language-' + lang + '">' + hljs.highlight(code, { language: lang }).value + '</code></pre>';
+  }
+  return '<pre><code class="hljs">' + hljs.highlightAuto(code).value + '</code></pre>';
+};
+marked.setOptions({ renderer, breaks: true, gfm: true });
 
 // 主题切换
 function toggleTheme() {
@@ -299,6 +302,13 @@ function toggleTheme() {
   document.getElementById('hljs-light').disabled = !isDark;
   document.getElementById('hljs-dark').disabled = isDark;
   localStorage.setItem('theme', isDark ? 'light' : 'dark');
+  // 同步 mermaid 主题并重渲染
+  if (window.mermaid) {
+    const newTheme = isDark ? 'light' : 'dark';
+    mermaid.initialize({ startOnLoad: false, theme: newTheme === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
+    const nodes = document.querySelectorAll('#content .mermaid, #preview .mermaid');
+    if (nodes.length) { try { mermaid.run({ nodes }); } catch {} }
+  }
 }
 
 // 初始化主题
@@ -308,6 +318,9 @@ function toggleTheme() {
   document.getElementById('theme-btn').textContent = saved === 'dark' ? '☀️' : '🌙';
   document.getElementById('hljs-light').disabled = saved === 'dark';
   document.getElementById('hljs-dark').disabled = saved !== 'dark';
+  if (window.mermaid) {
+    mermaid.initialize({ startOnLoad: false, theme: saved === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
+  }
 })();
 
 // WebSocket 连接
@@ -500,6 +513,10 @@ async function loadFile(key) {
 
   const content = document.getElementById('content');
   content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(data.content)}</div></div>`;
+  // 渲染 mermaid 图表（若文档中有）
+  if (window.mermaid && content.querySelector('.mermaid')) {
+    try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
+  }
 
   loadFileList();
 }
@@ -523,11 +540,18 @@ function toggleEdit() {
         <div class="markdown-body" id="preview">${marked.parse(originalContent)}</div>
       </div>
     </div>`;
+  if (window.mermaid && document.getElementById('preview').querySelector('.mermaid')) {
+    try { mermaid.run({ nodes: document.getElementById('preview').querySelectorAll('.mermaid') }); } catch {}
+  }
 }
 
 function updatePreview() {
   const text = document.getElementById('editor').value;
-  document.getElementById('preview').innerHTML = marked.parse(text);
+  const prev = document.getElementById('preview');
+  prev.innerHTML = marked.parse(text);
+  if (window.mermaid && prev.querySelector('.mermaid')) {
+    try { mermaid.run({ nodes: prev.querySelectorAll('.mermaid') }); } catch {}
+  }
 }
 
 function cancelEdit() {

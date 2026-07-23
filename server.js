@@ -6,6 +6,23 @@ const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
 const marked = require('marked');
 
+// marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染
+{
+  const r = new marked.Renderer();
+  r.code = function(token) {
+    // marked v12 传对象 { text, lang, escaped }
+    const text = typeof token === 'object' ? token.text : token;
+    const lang = typeof token === 'object' ? (token.lang || '') : arguments[1];
+    if (lang === 'mermaid') {
+      return '<div class="mermaid">' + String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>';
+    }
+    // 非默认 renderer 需要手动输出代码块结构
+    const cls = lang ? ' class="language-' + lang + '"' : '';
+    return '<pre><code' + cls + '>' + String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>';
+  };
+  marked.use({ renderer: r });
+}
+
 const app = express();
 const PORT = 8080;
 const DOCS_DIR = path.join(__dirname, 'docs');
@@ -551,6 +568,7 @@ app.get('/api/knowledge/view', (req, res) => {
 <title>${title}</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
 <style>
 body{max-width:860px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.6;color:#1f2328}
 pre{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:16px;overflow-x:auto}
@@ -564,7 +582,7 @@ img{max-width:100%}
 @media(prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre{background:#161b22;border-color:#30363d}code{background:#21262d}blockquote{color:#8b949e;border-color:#30363d}th{background:#161b22}}
 </style></head><body>
 ${marked.parse(content)}
-<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
+<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));if(window.mermaid&&document.querySelector('.mermaid')){mermaid.initialize({startOnLoad:false,theme:window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'default',securityLevel:'loose'});try{mermaid.run({nodes:document.querySelectorAll('.mermaid')})}catch(e){}}document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
 </body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
