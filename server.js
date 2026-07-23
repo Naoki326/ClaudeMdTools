@@ -547,7 +547,7 @@ img{max-width:100%}
 @media(prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre{background:#161b22;border-color:#30363d}code{background:#21262d}blockquote{color:#8b949e;border-color:#30363d}th{background:#161b22}}
 </style></head><body>
 ${marked.parse(content)}
-<script>document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b))</script>
+<script>document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean||!clean.toLowerCase().endsWith('.md'))return;e.preventDefault();var base=window.location.search;var rp=new URLSearchParams(base).get('path')||'';var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var parts=[];var combined=dir?dir+'/'+clean:clean;combined.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')parts.pop();else parts.push(seg)});var target=parts.join('/');window.location.href='/api/knowledge/view?root='+encodeURIComponent(new URLSearchParams(base).get('root')||'')+'&path='+encodeURIComponent(target)})</script>
 </body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
