@@ -126,13 +126,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .view-tab:hover { background: var(--bg-tertiary); }
 .view-tab.active { color: var(--accent); background: var(--bg-tertiary); }
 
-/* 课程列表 */
-.course-workspace { margin-bottom: 0; }
-.ws-header { padding: 5px 12px; font-size: 12px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+/* 课程列表（复用 tree-row/tree-root-row 与知识库一致的折叠样式） */
+.course-workspace { margin-bottom: 8px; }
+.ws-header { padding: 8px 12px; font-size: 14px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; border-top: 1px solid var(--border); }
 .ws-header:first-child { border-top: none; }
 .ws-header:hover { background: var(--bg-tertiary); }
 .ws-header .ws-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-header .file-count { font-weight: 400; color: var(--text-secondary); opacity: 0.6; font-size: 11px; }
+.ws-header .file-count { font-weight: 400; color: var(--text-secondary); opacity: 0.6; font-size: 12px; }
 
 /* 树形连线 */
 .tree-children { }
@@ -150,14 +150,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 /* 折叠指示器 */
 /* 子目录不显示折叠箭头，整行点击即可折叠/展开；仅根节点保留大三角形 */
 .tree-toggle { display: none; }
+.root-toggle { display: inline-block; width: 14px; text-align: center; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; transition: transform 0.15s; }
+.root-toggle.collapsed { transform: rotate(-90deg); }
 .tree-row { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 8px; cursor: pointer; user-select: none; font-size: 14px; }
 .tree-row:hover { background: var(--bg-tertiary); }
 .tree-row .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .tree-count { font-weight: 400; color: var(--text-secondary); opacity: 0.6; font-size: 12px; }
 /* 根节点：大三角形 + 粗体 */
 .tree-row.tree-root-row { padding: 8px 12px; font-weight: 700; font-size: 14px; }
-.tree-row.tree-root-row .root-toggle { display: inline-block; width: 14px; text-align: center; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; transition: transform 0.15s; }
-.tree-row.tree-root-row .root-toggle.collapsed { transform: rotate(-90deg); }
+.tree-row.tree-root-row .root-toggle { /* 通用 .root-toggle 已在上方定义 */ }
+.tree-row.tree-root-row .root-toggle.collapsed { /* 通用规则已覆盖 */ }
 .tree-row.file { cursor: pointer; }
 .tree-row.file .tree-label { font-weight: 400; }
 .tree-row.file.active { background: var(--accent); color: #fff; }
@@ -715,7 +717,7 @@ async function loadCourseList() {
     const total = (ws.lessons?.length || 0) + (ws.reference?.length || 0);
     const wsCollapsed = !expandedCourseWs.has(ws.id);
     let inner = `<div class="ws-header" onclick="toggleCourseWs('${escapeAttr(ws.id)}')" title="折叠/展开">
-      <span class="collapse-icon ${wsCollapsed ? 'collapsed' : ''}">▼</span>
+      <span class="root-toggle ${wsCollapsed ? 'collapsed' : ''}">▼</span>
       <span class="ws-name">🎓 ${escapeHtml(ws.name)}</span>
       <span class="file-count">${total}</span>
     </div>`;
@@ -734,7 +736,6 @@ function renderCourseGroup(wsId, kind, label, files, filesHtml) {
   const collapsed = !expandedCourseGroups.has(key);
   return `<div class="session-group">
     <div class="session-header" onclick="toggleCourseGroup('${escapeAttr(key)}')">
-      <span class="collapse-icon ${collapsed ? 'collapsed' : ''}">▼</span>
       <span class="session-label">${label}</span>
       <span class="file-count">${files.length}</span>
     </div>
