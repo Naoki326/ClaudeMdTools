@@ -18,7 +18,9 @@
 - 多层折叠：根目录 / 子目录 / 文件，每层可独立展开收起，默认折叠
 - 点击文件在右侧查看渲染后的 Markdown，支持**在线编辑**（保存写回原始文件）
 - 支持**新窗口打开**（渲染好的独立 HTML 页面）
-- 文档间的相对 `.md` 链接可直接点击跳转
+- **Mermaid 图表**渲染（`graph` / `classDiagram` / `flowchart` 等直接画成 SVG）
+- 文档间的 `.md` 链接可直接点击跳转，**浏览器后退/前进**可在文档间回溯
+- 侧边栏宽度可**拖拽调整**，状态自动记忆
 
 ### 🎓 课程（HTML 教学网页）
 
@@ -55,7 +57,7 @@ npm start
 
 ```
 knowledge.config.example.json   # 知识库根目录模板
-teach.config.example.json      # 课程根目录模板
+teach.config.example.json       # 课程根目录模板
 ```
 
 克隆后复制为正式文件并填入你的路径：
@@ -75,6 +77,24 @@ cp teach.config.example.json teach.config.json
 ```
 
 > 也可以不手动编辑文件——直接在网页里点 **⚙** 添加/删除根目录，会自动写入配置文件。
+
+## 让 AI 通过 URL 访问知识库
+
+服务提供了一套简洁的路径式 API，供 AI 直接用 URL 读取知识库文档（无需 JSON 解析、无需带参数）：
+
+```
+GET /kb                         # 列出所有文档路径（纯文本，一行一个）
+GET /kb/<project>               # 列出某项目的文档路径
+GET /kb/<project>/<path>.md     # 读取文档原文（text/plain）
+```
+
+示例：
+```
+GET /kb/weldone                                          # 看有哪些文档
+GET /kb/weldone/openspec/specs/auth/spec.md              # 直接拿到 markdown 原文
+```
+
+在项目的 `CLAUDE.md` / `AGENTS.md` 里加一行指向 `http://localhost:8080/kb`，AI 就能自行发现并读取文档。
 
 ## 自动运行（PM2）
 
@@ -108,6 +128,16 @@ ClaudeMdTools/
 
 ## API
 
+### 知识库路径式 API（推荐 AI / 程序访问）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/kb` | 列出所有文档路径（纯文本） |
+| GET | `/kb/<project>` | 列出某项目的文档路径 |
+| GET | `/kb/<project>/<path>` | 返回 `.md` 原文（text/plain） |
+
+### 知识库 JSON API
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/knowledge` | 列出知识库文档（树形结构） |
@@ -117,6 +147,11 @@ ClaudeMdTools/
 | GET | `/api/knowledge/config` | 读取知识库根目录配置 |
 | POST | `/api/knowledge/config` | 更新知识库根目录配置 |
 | POST | `/api/knowledge/preview` | 预览根目录扫描结果 |
+
+### 课程 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | GET | `/api/courses` | 列出课程 workspace 及其课程/速查卡 |
 | GET | `/api/courses/config` | 读取课程根目录配置 |
 | POST | `/api/courses/config` | 更新课程根目录配置 |
@@ -128,5 +163,5 @@ WebSocket 推送 `knowledge-change` / `course-change` 事件，前端自动刷�
 ## 技术栈
 
 - **后端**：Express 5 + ws + chokidar + marked
-- **前端**：原生 HTML/CSS/JS + marked + highlight.js
+- **前端**：原生 HTML/CSS/JS + marked + highlight.js + mermaid.js
 - **部署**：PM2
