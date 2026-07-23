@@ -877,9 +877,37 @@ async function kbSave() {
   else { const err = await res.json().catch(() => ({})); showToast(err.error || '保存失败'); }
 }
 
+// 知识库 markdown 内部链接：点击相对 .md 链接时跳转到对应文档（而非 Cannot GET）
+function normalizePosixPath(p) {
+  const parts = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+function handleKbLinkClick(e) {
+  if (currentView !== 'docs' || isEditing || !currentFile) return;
+  const a = e.target.closest && e.target.closest('a');
+  if (!a) return;
+  const href = a.getAttribute('href');
+  if (!href) return;
+  if (/^(https?:|mailto:|tel:|#)/i.test(href)) return;
+  const cleanHref = href.split('#')[0].split('?')[0];
+  if (!cleanHref || !cleanHref.toLowerCase().endsWith('.md')) return;
+  e.preventDefault();
+  const { root, relPath } = parseKbKey(currentFile);
+  const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
+  const target = normalizePosixPath(dir ? dir + '/' + cleanHref : cleanHref);
+  loadFile(kbKey(root, target));
+}
+
 // 初始化
 loadFileList();
 switchView('docs');
+document.getElementById('content').addEventListener('click', handleKbLinkClick);
 </script>
 </body>
 </html>
