@@ -280,36 +280,85 @@ async function loadFileList() {
   const res = await fetch('/api/knowledge');
   const data = await res.json();
   const list = document.getElementById('file-list');
-  const groups = data.groups || [];
+  const roots = data.roots || [];
   // 缓存所有文件用于标题查找
   fileDataCache = [];
-  groups.forEach(g => g.files.forEach(f => fileDataCache.push({ key: kbKey(g.root, f.relPath), title: f.title, relPath: f.relPath, project: g.project })));
+  function collectFiles(nodes, rootPath, parentPath) {
+    for (const n of nodes) {
+      if (n.type === 'file') {
+        const rel = (parentPath ? parentPath + '/' : '') + n.name;
+        fileDataCache.push({ key: kbKey(rootPath, rel), title: n.title, relPath: rel });
+      } else if (n.type === 'dir') {
+        const dirPath = (parentPath ? parentPath + '/' : '') + n.name;
+        collectFiles(n.children, rootPath, dirPath);
+      }
+    }
+  }
+  roots.forEach(r => collectFiles(r.children, r.path, ''));
 
-  if (groups.length === 0) {
+  if (roots.length === 0) {
     list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:13px;text-align:center">暂无知识库内容<br><span style="font-size:11px;opacity:0.7">点击右上角 ⚙ 添加知识库根目录</span></div>';
     return;
   }
 
-  list.innerHTML = groups.map(group => {
-    const isCollapsed = collapsedFolders.has(group.project);
-    const files = group.files.map(f => {
-      const key = kbKey(group.root, f.relPath);
-      return `
-      <div class="file-item ${key === currentFile ? 'active' : ''}" onclick="loadFile('${escapeAttr(key)}')" title="${escapeHtml(f.relPath)}">
-        <span class="file-name">${escapeHtml(f.title)}</span>
-      </div>`;
-    }).join('');
+  list.innerHTML = roots.map(r => renderKbRoot(r)).join('');
+}
 
-    return `
-      <div class="course-workspace">
-        <div class="ws-header" onclick="toggleFolderCollapse('${escapeAttr(group.project)}')" title="折叠/展开">
+// 渲染知识库树节点
+function renderKbRoot(r) {
+  const isCollapsed = collapsedFolders.has(r.path);
+  const fileCount = countFiles(r.children);
+  return `<div class="course-workspace">
+    <div class="ws-header" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
+      <span class="collapse-icon ${isCollapsed ? 'collapsed' : ''}">▼</span>
+      <span class="ws-name">📂 ${escapeHtml(r.name)}</span>
+      <span class="file-count">${fileCount}</span>
+    </div>
+    <div class="session-files ${isCollapsed ? 'collapsed' : ''}">
+      ${renderKbChildren(r.children, r.path, '', 1)}
+    </div>
+  </div>`;
+}
+
+// 递归渲染子节点（文件夹 + 文件）
+function renderKbChildren(children, rootPath, parentPath, depth) {
+  let html = '';
+  for (const n of children) {
+    const nodePath = (parentPath ? parentPath + '/' : '') + n.name;
+    const key = rootPath + '/' + nodePath;
+    if (n.type === 'dir') {
+      const isCollapsed = collapsedFolders.has(key);
+      const fileCount = countFiles(n.children);
+      const pad = depth * 16;
+      html += `<div class="course-workspace">
+        <div class="ws-header" style="padding-left:${12 + pad}px" onclick="toggleFolderCollapse('${escapeAttr(key)}')" title="${escapeHtml(nodePath)}">
           <span class="collapse-icon ${isCollapsed ? 'collapsed' : ''}">▼</span>
-          <span class="ws-name">📁 ${escapeHtml(group.project)}</span>
-          <span class="file-count">${group.files.length}</span>
+          <span class="ws-name">📁 ${escapeHtml(n.name)}</span>
+          <span class="file-count">${fileCount}</span>
         </div>
-        <div class="session-files ${isCollapsed ? 'collapsed' : ''}">${files}</div>
+        <div class="session-files ${isCollapsed ? 'collapsed' : ''}">
+          ${renderKbChildren(n.children, rootPath, nodePath, depth + 1)}
+        </div>
       </div>`;
-  }).join('');
+    } else if (n.type === 'file') {
+      const fileKey = kbKey(rootPath, nodePath);
+      const pad = depth * 16;
+      html += `<div class="file-item ${fileKey === currentFile ? 'active' : ''}" style="padding-left:${24 + pad}px" onclick="loadFile('${escapeAttr(fileKey)}')" title="${escapeHtml(nodePath)}">
+        <span class="file-name">📄 ${escapeHtml(n.title)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+// 计算树中 .md 文件总数
+function countFiles(children) {
+  let c = 0;
+  for (const n of children) {
+    if (n.type === 'file') c++;
+    else if (n.type === 'dir') c += countFiles(n.children);
+  }
+  return c;
 }
 
 // 文件夹折叠状态

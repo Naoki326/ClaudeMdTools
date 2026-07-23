@@ -436,38 +436,51 @@ function scanMarkdownFiles(dir, base, acc) {
   }
 }
 
-// 发现知识库内容：按"项目"（root 下的一级子目录）分组
+// 扫描目录构建树：只保留含 .md 的分支（空文件夹自动隐藏）
+// 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, mtime }
+function scanTree(dir, base) {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  // 先排序：目录在前，文件在后；各自按名称排
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const children = [];
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (KB_EXCLUDED.has(e.name.toLowerCase())) continue;
+      const sub = scanTree(full, base);
+      if (sub.length > 0) children.push({ type: 'dir', name: e.name, children: sub });
+    } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+      let title = null;
+      try {
+        const content = fs.readFileSync(full, 'utf-8');
+        title = titleFromMarkdown(content) || e.name.replace(/\.md$/i, '');
+      } catch { title = e.name.replace(/\.md$/i, ''); }
+      let mtime = 0;
+      try { mtime = fs.statSync(full).mtimeMs; } catch {}
+      children.push({ type: 'file', name: e.name, title, mtime });
+    }
+  }
+  return children;
+}
+
+// 发现知识库内容：以配置的 root 为顶层，下面是完整目录树
 function discoverKnowledge() {
   const config = readKnowledgeConfig();
-  const groups = [];
+  const roots = [];
   for (const root of config.roots || []) {
     const rootPath = path.resolve(root);
     if (!fs.existsSync(rootPath)) continue;
-    const rootName = path.basename(rootPath);
-    const allFiles = [];
-    scanMarkdownFiles(rootPath, rootPath, allFiles);
-    // 按相对路径第一段（项目名）分组
-    const projMap = new Map();
-    for (const f of allFiles) {
-      const segs = f.rel.split('/');
-      const proj = segs.length === 1 ? rootName : segs[0];
-      if (!projMap.has(proj)) projMap.set(proj, { project: proj, root: rootPath.replace(/\\/g, '/'), files: [] });
-      let title = null;
-      try {
-        const content = fs.readFileSync(f.abs, 'utf-8');
-        title = titleFromMarkdown(content) || f.rel;
-      } catch { title = f.rel; }
-      let mtime = 0;
-      try { mtime = fs.statSync(f.abs).mtimeMs; } catch {}
-      projMap.get(proj).files.push({ relPath: f.rel, title, mtime });
-    }
-    for (const [, p] of projMap) {
-      p.files.sort((a, b) => b.mtime - a.mtime);
-      groups.push(p);
+    const children = scanTree(rootPath, rootPath);
+    if (children.length > 0) {
+      roots.push({ name: path.basename(rootPath), path: rootPath.replace(/\\/g, '/'), children });
     }
   }
-  groups.sort((a, b) => a.project.localeCompare(b.project));
-  return groups;
+  return roots;
 }
 
 // 解析知识库文件路径（安全检查：必须在某个 root 内）
@@ -483,9 +496,9 @@ function resolveKnowledgePath(root, relPath) {
   return abs;
 }
 
-// GET /api/knowledge - 列出知识库文档（按项目分组）
+// GET /api/knowledge - 列出知识库文档（树形结构：root 顶层 + 目录树）
 app.get('/api/knowledge', (req, res) => {
-  try { res.json({ groups: discoverKnowledge() }); }
+  try { res.json({ roots: discoverKnowledge() }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
