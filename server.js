@@ -24,7 +24,7 @@ const marked = require('marked');
 }
 
 const app = express();
-const PORT = 8080;
+const PORT = parseInt(process.env.PORT, 10) || 8080;
 const DOCS_DIR = path.join(__dirname, 'docs');
 const METADATA_FILE = path.join(DOCS_DIR, '.metadata.json');
 const TEACH_CONFIG_FILE = path.join(__dirname, 'teach.config.json');
