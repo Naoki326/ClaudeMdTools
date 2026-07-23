@@ -1014,14 +1014,19 @@ function handleKbLinkClick(e) {
   if (!a) return;
   const href = a.getAttribute('href');
   if (!href) return;
-  if (/^(https?:|mailto:|tel:|#)/i.test(href)) return;
+  if (/^(https?:|mailto:|tel:|file:|#)/i.test(href)) return;
   const cleanHref = href.split('#')[0].split('?')[0];
   if (!cleanHref || !cleanHref.toLowerCase().endsWith('.md')) return;
   e.preventDefault();
   const { root, relPath } = parseKbKey(currentFile);
   const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
-  const target = normalizePosixPath(dir ? dir + '/' + cleanHref : cleanHref);
-  loadFile(kbKey(root, target));
+  const relTarget = normalizePosixPath(dir ? dir + '/' + cleanHref : cleanHref);
+  // 优先用严格相对路径；若不在文件树中，回退到「从 root 算起」的路径（兼容省略 ../ 的根相对引用）
+  const existsRel = fileDataCache.some(f => f.key === kbKey(root, relTarget));
+  const rootTarget = normalizePosixPath(cleanHref);
+  const existsRoot = fileDataCache.some(f => f.key === kbKey(root, rootTarget));
+  const finalTarget = existsRel ? relTarget : (existsRoot ? rootTarget : relTarget);
+  loadFile(kbKey(root, finalTarget));
 }
 
 // 初始化

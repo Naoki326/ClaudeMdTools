@@ -539,6 +539,11 @@ app.get('/api/knowledge/view', (req, res) => {
   if (!abs) return res.status(400).send('无效路径');
   try {
     const content = fs.readFileSync(abs, 'utf-8');
+    // 收集当前 root 下所有 .md 文件路径，供前端链接跳转回退查找
+    const rootPath = path.resolve(String(root));
+    const allFiles = [];
+    scanMarkdownFiles(rootPath, rootPath, allFiles);
+    const fileSet = allFiles.map(f => f.rel);
     const title = titleFromMarkdown(content) || path.basename(relPath);
     const html = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
@@ -559,7 +564,7 @@ img{max-width:100%}
 @media(prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre{background:#161b22;border-color:#30363d}code{background:#21262d}blockquote{color:#8b949e;border-color:#30363d}th{background:#161b22}}
 </style></head><body>
 ${marked.parse(content)}
-<script>document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean||!clean.toLowerCase().endsWith('.md'))return;e.preventDefault();var base=window.location.search;var rp=new URLSearchParams(base).get('path')||'';var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var parts=[];var combined=dir?dir+'/'+clean:clean;combined.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')parts.pop();else parts.push(seg)});var target=parts.join('/');window.location.href='/api/knowledge/view?root='+encodeURIComponent(new URLSearchParams(base).get('root')||'')+'&path='+encodeURIComponent(target)})</script>
+<script>var KB_FILES=${JSON.stringify(fileSet)};document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean||!clean.toLowerCase().endsWith('.md'))return;e.preventDefault();var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var parts=[];var combined=dir?dir+'/'+clean:clean;combined.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')parts.pop();else parts.push(seg)});var relTarget=parts.join('/');var rootParts=[];clean.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')rootParts.pop();else rootParts.push(seg)});var rootTarget=rootParts.join('/');var finalTarget=KB_FILES.indexOf(relTarget)!==-1?relTarget:(KB_FILES.indexOf(rootTarget)!==-1?rootTarget:relTarget);window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
 </body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
