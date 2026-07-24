@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
@@ -49,6 +50,22 @@ function humanize(str) {
 
 function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// 将路径开头的 ~ 展开为用户主目录，其余交给 path.resolve
+// 支持 '~/Work'、'~'、'~/'；原样保留绝对/相对路径
+function expandHome(p) {
+  if (typeof p !== 'string') return p;
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
+// 解析配置中的 root 路径：先展开 ~，再 resolve 为绝对路径
+function resolveRoot(p) {
+  return path.resolve(expandHome(p));
 }
 
 // 从 sourcePath 推导文件所属的“文件夹”（项目名）
@@ -278,7 +295,7 @@ function discoverWorkspaces() {
   const workspaces = [];
   const usedIds = new Set();
   for (const root of config.roots || []) {
-    const rootPath = path.resolve(root);
+    const rootPath = resolveRoot(root);
     if (!fs.existsSync(rootPath)) continue;
     let entries = [];
     try { entries = fs.readdirSync(rootPath, { withFileTypes: true }); } catch { continue; }
@@ -367,7 +384,7 @@ app.post('/api/courses/preview', (req, res) => {
     return res.status(400).json({ error: 'roots 必须是字符串数组' });
   }
   const result = roots.map(root => {
-    const rootPath = path.resolve(String(root));
+    const rootPath = resolveRoot(String(root));
     if (!fs.existsSync(rootPath)) {
       return { root, exists: false, workspaces: [] };
     }
@@ -489,7 +506,7 @@ function discoverKnowledge() {
   const config = readKnowledgeConfig();
   const roots = [];
   for (const root of config.roots || []) {
-    const rootPath = path.resolve(root);
+    const rootPath = resolveRoot(root);
     if (!fs.existsSync(rootPath)) continue;
     const children = scanTree(rootPath, rootPath);
     if (children.length > 0) {
@@ -502,9 +519,9 @@ function discoverKnowledge() {
 // 解析知识库文件路径（安全检查：必须在某个 root 内）
 function resolveKnowledgePath(root, relPath) {
   if (!root || !relPath) return null;
-  const rootPath = path.resolve(String(root));
+  const rootPath = resolveRoot(String(root));
   const config = readKnowledgeConfig();
-  const inRoots = (config.roots || []).some(r => path.resolve(r) === rootPath);
+  const inRoots = (config.roots || []).some(r => resolveRoot(r) === rootPath);
   if (!inRoots) return null;
   const abs = path.resolve(rootPath, String(relPath));
   if (abs !== rootPath && !abs.startsWith(rootPath + path.sep)) return null;
@@ -535,7 +552,7 @@ app.post('/api/knowledge/preview', (req, res) => {
   const { roots } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
   const result = roots.map(root => {
-    const rootPath = path.resolve(String(root));
+    const rootPath = resolveRoot(String(root));
     if (!fs.existsSync(rootPath)) return { root, exists: false, mdCount: 0, projects: [] };
     const files = [];
     scanMarkdownFiles(rootPath, rootPath, files);
@@ -557,7 +574,7 @@ app.get('/api/knowledge/view', (req, res) => {
   try {
     const content = fs.readFileSync(abs, 'utf-8');
     // 收集当前 root 下所有 .md 文件路径，供前端链接跳转回退查找
-    const rootPath = path.resolve(String(root));
+    const rootPath = resolveRoot(String(root));
     const allFiles = [];
     scanMarkdownFiles(rootPath, rootPath, allFiles);
     const fileSet = allFiles.map(f => f.rel);
@@ -728,7 +745,7 @@ function refreshKnowledgeWatcher() {
   if (knowledgeWatcher) { try { knowledgeWatcher.close(); } catch {} knowledgeWatcher = null; }
   const config = readKnowledgeConfig();
   if (!config.roots.length) return;
-  knowledgeWatcher = chokidar.watch(config.roots.map(r => path.resolve(r)), {
+  knowledgeWatcher = chokidar.watch(config.roots.map(r => resolveRoot(r)), {
     ignored: (p) => {
       if (typeof p !== 'string' || !p) return false;
       const name = path.basename(p).toLowerCase();
