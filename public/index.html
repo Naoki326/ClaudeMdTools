@@ -933,6 +933,7 @@ async function showKnowledgeConfigDialog() {
     cfg = await res.json();
   } catch {}
   const roots = cfg.roots || [];
+  const excludeDirs = cfg.excludeDirs || [];
 
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
@@ -945,6 +946,9 @@ async function showKnowledgeConfigDialog() {
         <input type="text" id="kb-new-root" placeholder="例如 C:/Work 或 C:/Work/AI" style="flex:1;margin-bottom:0">
         <button class="btn" onclick="kbAddRoot()">添加</button>
       </div>
+      <div style="margin-bottom:6px;font-size:13px;font-weight:600">排除目录名</div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">额外排除的目录名（不区分大小写），用逗号分隔。默认已排除 node_modules/.git/dist 等，通常无需修改。</div>
+      <input type="text" id="kb-exclude-dirs" value="${escapeHtml(excludeDirs.join(', '))}" placeholder="例如 docs, vendor" style="width:100%;box-sizing:border-box;margin-bottom:16px">
       <div class="dialog-actions">
         <button class="btn" onclick="this.closest('.dialog-overlay').remove()">取消</button>
         <button class="btn btn-primary" onclick="kbSave()">保存</button>
@@ -957,17 +961,21 @@ async function showKnowledgeConfigDialog() {
   kbRefreshPreview();
 
   overlay.querySelector('#kb-new-root').addEventListener('keydown', e => { if (e.key === 'Enter') kbAddRoot(); });
+  // 排除目录输入变化时实时刷新预览
+  const exclEl = overlay.querySelector('#kb-exclude-dirs');
+  if (exclEl) exclEl.addEventListener('input', () => kbRefreshPreview());
 }
 
 async function kbRefreshPreview() {
   _kbPreview = {};
   const roots = window._kbPendingRoots || [];
   if (!roots.length) { kbRenderList(); return; }
+  const excludeDirs = kbGetExcludeDirs();
   try {
     const res = await fetch('/api/knowledge/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roots }),
+      body: JSON.stringify({ roots, excludeDirs }),
     });
     const data = await res.json();
     (data.preview || []).forEach(p => { _kbPreview[p.root] = p; });
@@ -1018,14 +1026,22 @@ function kbRemoveRoot(i) {
 
 async function kbSave() {
   const roots = window._kbPendingRoots || [];
+  const excludeDirs = kbGetExcludeDirs();
   const res = await fetch('/api/knowledge/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ roots }),
+    body: JSON.stringify({ roots, excludeDirs }),
   });
   document.querySelector('.dialog-overlay')?.remove();
   if (res.ok) { await loadFileList(); showToast('已保存知识库配置'); }
   else { const err = await res.json().catch(() => ({})); showToast(err.error || '保存失败'); }
+}
+
+// 读取排除目录输入框的值，拆成数组
+function kbGetExcludeDirs() {
+  const el = document.getElementById('kb-exclude-dirs');
+  if (!el) return [];
+  return el.value.split(',').map(s => s.trim()).filter(Boolean);
 }
 
 // 知识库 markdown 内部链接：点击相对 .md 链接时跳转到对应文档（而非 Cannot GET）

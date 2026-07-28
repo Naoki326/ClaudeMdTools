@@ -428,13 +428,35 @@ app.use('/teach', (req, res, next) => {
 
 const KNOWLEDGE_CONFIG_FILE = path.join(__dirname, 'knowledge.config.json');
 
-// 扫描时排除的目录名（常见无关目录）
-const KB_EXCLUDED = new Set([
+// 内置默认排除的目录名（小写匹配）
+// 注意：'docs' 不在默认列表中 -- 大多数项目的 docs/ 里有有价值的文档。
+// 如需排除特定目录，通过 knowledge.config.json 的 excludeDirs 配置。
+// ClaudeMdTools 自身的 docs/ 通过 LOCAL_EXCLUDE_DIRS 按绝对路径排除，避免误伤其他项目。
+const DEFAULT_EXCLUDED = [
   'node_modules', '.git', '.svn', 'bin', 'obj', 'dist', 'build',
   '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea',
-  'target', 'out', 'logs', '.cache', '.vs', 'packages', 'docs',
+  'target', 'out', 'logs', '.cache', '.vs', 'packages',
   '.vscode', '.claude', '.husky', '.turbo', '.gradle',
-]);
+];
+
+// 按绝对路径排除的目录（只针对本工具自身的 docs/，防止管理文档在知识库视图中重复）
+const LOCAL_EXCLUDE_DIRS = [path.join(__dirname, 'docs')];
+
+// 构建有效排除集合：内置默认 + 配置文件中的 excludeDirs + 可选的额外目录
+function getExcludedSet(extraDirs) {
+  const config = readKnowledgeConfig();
+  const fromConfig = (config.excludeDirs || []).map(d => String(d).toLowerCase());
+  const fromArg = (extraDirs || []).map(d => String(d).toLowerCase());
+  return new Set([...DEFAULT_EXCLUDED, ...fromConfig, ...fromArg]);
+}
+
+// 判断路径是否应被排除：先查目录名黑名单，再查绝对路径黑名单
+function isExcluded(fullPath, dirName, excludedSet) {
+  const excluded = excludedSet || getExcludedSet();
+  if (dirName && excluded.has(dirName.toLowerCase())) return true;
+  const norm = path.resolve(fullPath);
+  return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
+}
 
 function readKnowledgeConfig() {
   try {
@@ -456,14 +478,14 @@ function titleFromMarkdown(content) {
 }
 
 // 递归扫描目录下所有 .md 文件（排除常见无关目录）
-function scanMarkdownFiles(dir, base, acc) {
+function scanMarkdownFiles(dir, base, acc, excludedSet) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
-      if (KB_EXCLUDED.has(e.name.toLowerCase())) continue;
-      scanMarkdownFiles(full, base, acc);
+      if (isExcluded(full, e.name, excludedSet)) continue;
+      scanMarkdownFiles(full, base, acc, excludedSet);
     } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
       acc.push({ abs: full, rel: path.relative(base, full).replace(/\\/g, '/') });
     }
@@ -472,7 +494,7 @@ function scanMarkdownFiles(dir, base, acc) {
 
 // 扫描目录构建树：只保留含 .md 的分支（空文件夹自动隐藏）
 // 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, mtime }
-function scanTree(dir, base) {
+function scanTree(dir, base, excludedSet) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   // 先排序：目录在前，文件在后；各自按名称排
@@ -484,8 +506,8 @@ function scanTree(dir, base) {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
-      if (KB_EXCLUDED.has(e.name.toLowerCase())) continue;
-      const sub = scanTree(full, base);
+      if (isExcluded(full, e.name, excludedSet)) continue;
+      const sub = scanTree(full, base, excludedSet);
       if (sub.length > 0) children.push({ type: 'dir', name: e.name, children: sub });
     } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
       let title = null;
@@ -504,11 +526,12 @@ function scanTree(dir, base) {
 // 发现知识库内容：以配置的 root 为顶层，下面是完整目录树
 function discoverKnowledge() {
   const config = readKnowledgeConfig();
+  const excludedSet = getExcludedSet();
   const roots = [];
   for (const root of config.roots || []) {
     const rootPath = resolveRoot(root);
     if (!fs.existsSync(rootPath)) continue;
-    const children = scanTree(rootPath, rootPath);
+    const children = scanTree(rootPath, rootPath, excludedSet);
     if (children.length > 0) {
       roots.push({ name: path.basename(rootPath), path: rootPath.replace(/\\/g, '/'), children });
     }
@@ -540,22 +563,27 @@ app.get('/api/knowledge/config', (req, res) => {
   res.json(readKnowledgeConfig());
 });
 app.post('/api/knowledge/config', (req, res) => {
-  const { roots } = req.body;
+  const { roots, excludeDirs } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
-  writeKnowledgeConfig({ roots: roots.map(String) });
+  const config = { roots: roots.map(String) };
+  if (Array.isArray(excludeDirs)) {
+    config.excludeDirs = excludeDirs.map(String).filter(Boolean);
+  }
+  writeKnowledgeConfig(config);
   refreshKnowledgeWatcher();
   res.json({ message: 'ok' });
 });
 
 // POST /api/knowledge/preview - 预览每个 root 发现的 .md 数量和项目
 app.post('/api/knowledge/preview', (req, res) => {
-  const { roots } = req.body;
+  const { roots, excludeDirs } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
+  const excludedSet = getExcludedSet(excludeDirs);
   const result = roots.map(root => {
     const rootPath = resolveRoot(String(root));
     if (!fs.existsSync(rootPath)) return { root, exists: false, mdCount: 0, projects: [] };
     const files = [];
-    scanMarkdownFiles(rootPath, rootPath, files);
+    scanMarkdownFiles(rootPath, rootPath, files, excludedSet);
     const projSet = new Set();
     files.forEach(f => {
       const s = f.rel.split('/');
@@ -745,11 +773,14 @@ function refreshKnowledgeWatcher() {
   if (knowledgeWatcher) { try { knowledgeWatcher.close(); } catch {} knowledgeWatcher = null; }
   const config = readKnowledgeConfig();
   if (!config.roots.length) return;
+  const excluded = getExcludedSet();
   knowledgeWatcher = chokidar.watch(config.roots.map(r => resolveRoot(r)), {
     ignored: (p) => {
       if (typeof p !== 'string' || !p) return false;
       const name = path.basename(p).toLowerCase();
-      return KB_EXCLUDED.has(name);
+      if (excluded.has(name)) return true;
+      const norm = path.resolve(p);
+      return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
     },
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },

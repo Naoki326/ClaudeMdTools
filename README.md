@@ -12,8 +12,8 @@
 
 ### 📚 知识库（Markdown 文档）
 
-- 配置若干**根目录**（如 `C:/Work`）
-- server 递归扫描这些目录下的所有 `.md` 文件（自动跳过 `node_modules`、`.git`、`bin`、`obj` 等）
+- 配置若干**根目录**（如 `C:/Work`），可选配置**排除目录名**（如 `docs`、`vendor`）
+- server 递归扫描这些目录下的所有 `.md` 文件（默认排除 `node_modules`、`.git`、`bin`、`obj` 等；可在配置中追加自定义排除目录）
 - 以配置的根目录为顶层，按**树形目录结构**展示，空文件夹自动隐藏
 - 多层折叠：根目录 / 子目录 / 文件，每层可独立展开收起，默认折叠
 - 点击文件在右侧查看渲染后的 Markdown，支持**在线编辑**（保存写回原始文件）
@@ -48,7 +48,7 @@ npm start
 
 | 视图 | 配置文件 | 扫描规则 |
 |------|---------|---------|
-| 知识库 | `knowledge.config.json` | 递归扫描所有 `.md`，按目录树展示 |
+| 知识库 | `knowledge.config.json` | 递归扫描所有 `.md`，按目录树展示；可用 `excludeDirs` 追加排除目录名 |
 | 课程 | `teach.config.json` | 扫描一级子目录，含 `lessons/` 的识别为 workspace |
 
 配置对话框会**实时预览**每个根目录扫到了多少文件、哪些项目，加错路径立刻能看到（✗ 不存在 / 0 个）。
@@ -72,13 +72,26 @@ cp teach.config.example.json teach.config.json
 模板示例：
 ```json
 // knowledge.config.json
-{ "roots": ["C:/Work"] }
+{
+  "roots": ["C:/Work"],
+  "excludeDirs": []  // 可选：额外排除的目录名，如 ["docs", "vendor"]
+}
 
 // teach.config.json
 { "roots": ["C:/Work/AI", "C:/Work/AnotherFSM"] }
 ```
 
-> 也可以不手动编辑文件——直接在网页里点 **⚙** 添加/删除根目录，会自动写入配置文件。
+> 也可以不手动编辑文件——直接在网页里点 **⚙** 添加/删除根目录、配置排除目录，会自动写入配置文件。
+
+### 排除目录（excludeDirs）
+
+`excludeDirs` 是一个字符串数组，列出扫描时要跳过的**目录名**（不区分大小写，不区分层级——任何层级的同名目录都会被排除）。它和内置默认排除列表（`node_modules`、`.git`、`dist` 等）合并生效。
+
+常见用途：
+- 某些项目根目录有大量与文档无关的 `.md`（如 `node_modules` 里的说明文件、生成文档目录），想从知识库视图里隐藏
+- 项目自带不想混入知识库的 `docs/`、`vendor/` 等目录
+
+> 注意：`excludeDirs` 是全局生效的——配置后对所有根目录下的同名目录都排除。ClaudeMdTools 自身的 `docs/` 目录按绝对路径单独排除，不会误伤其他项目的 `docs/`。
 
 ## 让 AI 通过 URL 访问知识库
 
@@ -146,8 +159,8 @@ ClaudeMdTools/
 | GET | `/api/knowledge/file` | 读取单个 .md 文件内容 |
 | PUT | `/api/knowledge/file` | 保存编辑（写回原始文件） |
 | GET | `/api/knowledge/view` | 渲染好的 HTML 页面（新窗口打开用） |
-| GET | `/api/knowledge/config` | 读取知识库根目录配置 |
-| POST | `/api/knowledge/config` | 更新知识库根目录配置 |
+| GET | `/api/knowledge/config` | 读取知识库配置（roots + excludeDirs） |
+| POST | `/api/knowledge/config` | 更新知识库配置（roots + excludeDirs） |
 | POST | `/api/knowledge/preview` | 预览根目录扫描结果 |
 
 ### 课程 API
