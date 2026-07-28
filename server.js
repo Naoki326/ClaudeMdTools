@@ -792,6 +792,14 @@ function refreshKnowledgeWatcher() {
 }
 refreshKnowledgeWatcher();
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 被占用，等待 PM2 重试...`);
+    process.exit(0);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   console.log(`Markdown 查看器已启动: http://localhost:${PORT}`);
   console.log(`文档目录: ${DOCS_DIR}`);
