@@ -447,12 +447,35 @@ function countFiles(children) {
   return c;
 }
 
-// 文件夹展开状态（默认全部折叠）
+// 文件夹展开状态（持久化到 localStorage，刷新后保持）
 const expandedFolders = new Set();
+const KB_EXPANDED_KEY = 'kb-expanded-folders';
+
+function persistExpandedFolders() {
+  try { localStorage.setItem(KB_EXPANDED_KEY, JSON.stringify([...expandedFolders])); } catch {}
+}
+function restoreExpandedFolders() {
+  try {
+    const saved = localStorage.getItem(KB_EXPANDED_KEY);
+    if (saved) JSON.parse(saved).forEach(k => expandedFolders.add(k));
+  } catch {}
+}
+// 把从根到指定文件的所有祖先文件夹加入展开集合，确保当前文件在树上可见
+function expandToCurrentFile(fileKey) {
+  if (!fileKey) return;
+  const { root, relPath } = parseKbKey(fileKey);
+  expandedFolders.add(root); // 根目录始终展开
+  const parts = relPath.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    expandedFolders.add(root + '/' + parts.slice(0, i).join('/'));
+  }
+  persistExpandedFolders();
+}
 
 function toggleFolderCollapse(folder) {
   if (expandedFolders.has(folder)) expandedFolders.delete(folder);
   else expandedFolders.add(folder);
+  persistExpandedFolders();
   loadFileList();
 }
 
@@ -526,6 +549,8 @@ async function loadFile(key, fromHistory) {
     history.pushState({ kbKey: key }, '', '#kbdoc=' + encodeURIComponent(key));
   }
 
+  // 确保当前文件所在路径展开（刷新/直接打开链接时也能定位到该文件）
+  expandToCurrentFile(key);
   loadFileList();
 }
 
@@ -1087,6 +1112,7 @@ function handleKbLinkClick(e) {
 
 // 初始化
 (async () => {
+  restoreExpandedFolders();
   await loadFileList();
   switchView('docs');
   document.getElementById('content').addEventListener('click', handleKbLinkClick);
