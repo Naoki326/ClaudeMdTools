@@ -477,23 +477,47 @@ function titleFromMarkdown(content) {
   return m ? m[1].trim() : null;
 }
 
-// 递归扫描目录下所有 .md 文件（排除常见无关目录）
-function scanMarkdownFiles(dir, base, acc, excludedSet) {
+// 知识库文档扩展名：.md / .html / .htm
+function isKnowledgeDoc(fileName) {
+  const n = String(fileName).toLowerCase();
+  return n.endsWith('.md') || n.endsWith('.html') || n.endsWith('.htm');
+}
+
+// 是否为 HTML 文档
+function isHtmlDoc(fileName) {
+  const n = String(fileName).toLowerCase();
+  return n.endsWith('.html') || n.endsWith('.htm');
+}
+
+// 从 HTML 提取标题：<title> 优先，其次第一个 <h1>，都无则 null
+function titleFromHtml(content) {
+  const t = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (t) { const s = t[1].replace(/<[^>]+>/g, '').trim(); if (s) return s; }
+  const h = content.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (h) { const s = h[1].replace(/<[^>]+>/g, '').trim(); if (s) return s; }
+  return null;
+}
+
+// /kbfile 静态托管允许的文件类型（HTML 文档及其相对资源）
+const KB_STATIC_EXTS = ['.html', '.htm', '.css', '.js', '.mjs', '.json', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.pdf'];
+
+// 递归扫描目录下所有知识库文档（.md / .html / .htm，排除常见无关目录）
+function scanKnowledgeFiles(dir, base, acc, excludedSet) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (isExcluded(full, e.name, excludedSet)) continue;
-      scanMarkdownFiles(full, base, acc, excludedSet);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+      scanKnowledgeFiles(full, base, acc, excludedSet);
+    } else if (e.isFile() && isKnowledgeDoc(e.name)) {
       acc.push({ abs: full, rel: path.relative(base, full).replace(/\\/g, '/') });
     }
   }
 }
 
-// 扫描目录构建树：只保留含 .md 的分支（空文件夹自动隐藏）
-// 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, mtime }
+// 扫描目录构建树：只保留含知识库文档（.md/.html/.htm）的分支（空文件夹自动隐藏）
+// 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, kind, mtime }
 function scanTree(dir, base, excludedSet) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
@@ -509,15 +533,19 @@ function scanTree(dir, base, excludedSet) {
       if (isExcluded(full, e.name, excludedSet)) continue;
       const sub = scanTree(full, base, excludedSet);
       if (sub.length > 0) children.push({ type: 'dir', name: e.name, children: sub });
-    } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+    } else if (e.isFile() && isKnowledgeDoc(e.name)) {
       let title = null;
       try {
         const content = fs.readFileSync(full, 'utf-8');
-        title = titleFromMarkdown(content) || e.name.replace(/\.md$/i, '');
-      } catch { title = e.name.replace(/\.md$/i, ''); }
+        if (isHtmlDoc(e.name)) {
+          title = titleFromHtml(content) || e.name.replace(/\.html?$/i, '');
+        } else {
+          title = titleFromMarkdown(content) || e.name.replace(/\.md$/i, '');
+        }
+      } catch { title = e.name.replace(/\.(md|html?)$/i, ''); }
       let mtime = 0;
       try { mtime = fs.statSync(full).mtimeMs; } catch {}
-      children.push({ type: 'file', name: e.name, title, mtime });
+      children.push({ type: 'file', name: e.name, title, kind: isHtmlDoc(e.name) ? 'html' : 'md', mtime });
     }
   }
   return children;
@@ -528,14 +556,14 @@ function discoverKnowledge() {
   const config = readKnowledgeConfig();
   const excludedSet = getExcludedSet();
   const roots = [];
-  for (const root of config.roots || []) {
+  (config.roots || []).forEach((root, index) => {
     const rootPath = resolveRoot(root);
-    if (!fs.existsSync(rootPath)) continue;
+    if (!fs.existsSync(rootPath)) return;
     const children = scanTree(rootPath, rootPath, excludedSet);
     if (children.length > 0) {
-      roots.push({ name: path.basename(rootPath), path: rootPath.replace(/\\/g, '/'), children });
+      roots.push({ name: path.basename(rootPath), path: rootPath.replace(/\\/g, '/'), index, children });
     }
-  }
+  });
   return roots;
 }
 
@@ -548,7 +576,7 @@ function resolveKnowledgePath(root, relPath) {
   if (!inRoots) return null;
   const abs = path.resolve(rootPath, String(relPath));
   if (abs !== rootPath && !abs.startsWith(rootPath + path.sep)) return null;
-  if (!abs.toLowerCase().endsWith('.md')) return null;
+  if (!isKnowledgeDoc(abs)) return null;
   return abs;
 }
 
@@ -574,37 +602,44 @@ app.post('/api/knowledge/config', (req, res) => {
   res.json({ message: 'ok' });
 });
 
-// POST /api/knowledge/preview - 预览每个 root 发现的 .md 数量和项目
+// POST /api/knowledge/preview - 预览每个 root 发现的文档（.md/.html）数量和项目
 app.post('/api/knowledge/preview', (req, res) => {
   const { roots, excludeDirs } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
   const excludedSet = getExcludedSet(excludeDirs);
   const result = roots.map(root => {
     const rootPath = resolveRoot(String(root));
-    if (!fs.existsSync(rootPath)) return { root, exists: false, mdCount: 0, projects: [] };
+    if (!fs.existsSync(rootPath)) return { root, exists: false, docCount: 0, projects: [] };
     const files = [];
-    scanMarkdownFiles(rootPath, rootPath, files, excludedSet);
+    scanKnowledgeFiles(rootPath, rootPath, files, excludedSet);
     const projSet = new Set();
     files.forEach(f => {
       const s = f.rel.split('/');
       projSet.add(s.length === 1 ? path.basename(rootPath) : s[0]);
     });
-    return { root, exists: true, mdCount: files.length, projects: [...projSet].sort() };
+    return { root, exists: true, docCount: files.length, projects: [...projSet].sort() };
   });
   res.json({ preview: result });
 });
 
 // GET /api/knowledge/view - 返回渲染好的 HTML 页面（用于新标签页打开）
+// .md 走 Markdown 渲染；.html 直接返回原始文件（保持原样展示）
 app.get('/api/knowledge/view', (req, res) => {
   const { root, path: relPath } = req.query;
   const abs = resolveKnowledgePath(root, relPath);
   if (!abs) return res.status(400).send('无效路径');
   try {
     const content = fs.readFileSync(abs, 'utf-8');
-    // 收集当前 root 下所有 .md 文件路径，供前端链接跳转回退查找
+    // HTML 文档：原样返回（相对资源请通过 /kbfile/<index>/<path> 访问）
+    if (isHtmlDoc(abs)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(content);
+      return;
+    }
+    // 收集当前 root 下所有文档路径，供前端链接跳转回退查找
     const rootPath = resolveRoot(String(root));
     const allFiles = [];
-    scanMarkdownFiles(rootPath, rootPath, allFiles);
+    scanKnowledgeFiles(rootPath, rootPath, allFiles);
     const fileSet = allFiles.map(f => f.rel);
     const title = titleFromMarkdown(content) || path.basename(relPath);
     const html = `<!DOCTYPE html>
@@ -641,7 +676,7 @@ app.get('/api/knowledge/file', (req, res) => {
   if (!abs) return res.status(400).json({ error: '无效路径' });
   try {
     const content = fs.readFileSync(abs, 'utf-8');
-    res.json({ content, title: titleFromMarkdown(content), relPath, root });
+    res.json({ content, title: isHtmlDoc(abs) ? titleFromHtml(content) : titleFromMarkdown(content), relPath, root, kind: isHtmlDoc(abs) ? 'html' : 'md' });
   } catch { res.status(404).json({ error: '文件不存在' }); }
 });
 
@@ -721,6 +756,32 @@ app.use('/kb/', (req, res, next) => {
   } catch { res.status(404).send('文件不存在'); }
 });
 
+// /kbfile/<rootIndex>/<relPath...> - 原样托管知识库文件
+// HTML 文档用 iframe 展示时，其内部的相对路径资源（同目录 css/js/图片等）
+// 会在浏览器中按 /kbfile/<rootIndex>/<同目录> 解析，保证文档完整可显示。
+app.use('/kbfile', (req, res) => {
+  const rest = req.path.replace(/^\/+/, ''); // <rootIndex>/<relPath...>
+  const slashIdx = rest.indexOf('/');
+  const rootIdx = parseInt(slashIdx === -1 ? rest : rest.slice(0, slashIdx), 10);
+  const relPath = slashIdx === -1 ? '' : rest.slice(slashIdx + 1);
+  const config = readKnowledgeConfig();
+  const rootCfg = (config.roots || [])[rootIdx];
+  if (!rootCfg) return res.status(404).send('未知 root');
+  const rootPath = resolveRoot(rootCfg);
+  if (!fs.existsSync(rootPath)) return res.status(404).send('root 不存在');
+  // 在 root 内解析（不能用 resolveKnowledgePath，它只放行 .md/.html/.htm 文档）
+  const abs = path.resolve(rootPath, relPath);
+  if (abs !== rootPath && !abs.startsWith(rootPath + path.sep)) return res.status(404).send('路径越界');
+  let stat = null;
+  try { stat = fs.statSync(abs); } catch {}
+  if (!stat || !stat.isFile()) return res.status(404).send('文件不存在');
+  const ext = path.extname(abs).toLowerCase();
+  if (!KB_STATIC_EXTS.includes(ext)) return res.status(403).send('不允许访问该类型');
+  // 注：res.sendFile 在本机 Windows 上对绝对路径解析失败（send 包 Not Found），
+  // 直接读文件字节返回，按扩展名设置 Content-Type。
+  res.type(ext).send(fs.readFileSync(abs));
+});
+
 // HTTP + WebSocket 共享同一端口
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -786,7 +847,7 @@ function refreshKnowledgeWatcher() {
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
   knowledgeWatcher.on('all', (event, filePath) => {
-    if (!filePath.toLowerCase().endsWith('.md')) return;
+    if (!isKnowledgeDoc(filePath)) return;
     broadcast({ type: 'knowledge-change', event });
   });
 }

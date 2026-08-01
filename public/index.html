@@ -223,6 +223,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 let currentFile = null;
 let isEditing = false;
 let originalContent = '';
+let currentKind = 'md'; // 当前知识库文件类型：md / html
+const rootIndexMap = {}; // root 绝对路径 -> 配置索引（/kbfile 用）
 let ws = null;
 let fileDataCache = []; // 缓存文件列表数据，用于获取标题
 
@@ -368,6 +370,9 @@ async function loadFileList() {
   const roots = data.roots || [];
   // 缓存所有文件用于标题查找
   fileDataCache = [];
+  // 记录 root 路径 -> 配置索引（用于 /kbfile/<index>/<path> 原样托管）
+  Object.keys(rootIndexMap).forEach(k => delete rootIndexMap[k]);
+  roots.forEach((r, i) => { rootIndexMap[r.path] = r.index != null ? r.index : i; });
   function collectFiles(nodes, rootPath, parentPath) {
     for (const n of nodes) {
       if (n.type === 'file') {
@@ -427,9 +432,10 @@ function renderKbChildren(children, rootPath, parentPath, depth) {
     } else if (n.type === 'file') {
       const fileKey = kbKey(rootPath, nodePath);
       const pad = 14 + depth * 16;
+      const icon = n.kind === 'html' ? '🌐' : '📄';
       html += `<div class="tree-item" style="--tree-pad:${pad}px">
         <div class="tree-row file ${fileKey === currentFile ? 'active' : ''}" style="padding-left:${pad + 10}px" onclick="loadFile('${escapeAttr(fileKey)}')" title="${escapeHtml(nodePath)}">
-          <span class="tree-label">📄 ${escapeHtml(n.title)}</span>
+          <span class="tree-label">${icon} ${escapeHtml(n.title)}</span>
         </div>
       </div>`;
     }
@@ -522,6 +528,7 @@ async function loadFile(key, fromHistory) {
   if (!res.ok) { showToast('文件读取失败'); return; }
   const data = await res.json();
   originalContent = data.content;
+  currentKind = data.kind === 'html' ? 'html' : 'md';
 
   document.getElementById('toolbar').style.display = 'flex';
   document.getElementById('toolbar-always').style.display = 'none';
@@ -538,10 +545,17 @@ async function loadFile(key, fromHistory) {
   document.getElementById('sidebar-open-btn').style.display = sidebarCollapsed ? '' : 'none';
 
   const content = document.getElementById('content');
-  content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(data.content)}</div></div>`;
-  // 渲染 mermaid 图表（若文档中有）
-  if (window.mermaid && content.querySelector('.mermaid')) {
-    try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
+  if (currentKind === 'html') {
+    // HTML 文档：用 iframe 原样展示（/kbfile 托管保证同目录相对资源可解析）
+    const idx = rootIndexMap[root] != null ? rootIndexMap[root] : 0;
+    const iframeSrc = `/kbfile/${idx}/${relPath}`;
+    content.innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(iframeSrc)}"></iframe>`;
+  } else {
+    content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(data.content)}</div></div>`;
+    // 渲染 mermaid 图表（若文档中有）
+    if (window.mermaid && content.querySelector('.mermaid')) {
+      try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
+    }
   }
 
   // 浏览器历史：导航时压入历史栈，重载/后退恢复时不重复压入
@@ -562,6 +576,9 @@ function toggleEdit() {
   document.getElementById('cancel-btn').style.display = '';
 
   const content = document.getElementById('content');
+  const previewHtml = currentKind === 'html'
+    ? `<iframe id="preview" class="course-frame" srcdoc="${escapeAttr(originalContent)}"></iframe>`
+    : `<div class="markdown-body" id="preview">${marked.parse(originalContent)}</div>`;
   content.innerHTML = `
     <div class="edit-container">
       <div class="editor-pane">
@@ -570,10 +587,10 @@ function toggleEdit() {
       </div>
       <div class="preview-pane">
         <div class="pane-header">预览</div>
-        <div class="markdown-body" id="preview">${marked.parse(originalContent)}</div>
+        ${previewHtml}
       </div>
     </div>`;
-  if (window.mermaid && document.getElementById('preview').querySelector('.mermaid')) {
+  if (window.mermaid && document.getElementById('preview').querySelector && document.getElementById('preview').querySelector('.mermaid')) {
     try { mermaid.run({ nodes: document.getElementById('preview').querySelectorAll('.mermaid') }); } catch {}
   }
 }
@@ -581,6 +598,11 @@ function toggleEdit() {
 function updatePreview() {
   const text = document.getElementById('editor').value;
   const prev = document.getElementById('preview');
+  if (currentKind === 'html') {
+    // HTML 编辑：iframe 实时预览（srcdoc 内嵌，不依赖相对路径）
+    prev.srcdoc = text;
+    return;
+  }
   prev.innerHTML = marked.parse(text);
   if (window.mermaid && prev.querySelector('.mermaid')) {
     try { mermaid.run({ nodes: prev.querySelectorAll('.mermaid') }); } catch {}
@@ -808,10 +830,13 @@ function openCourse(wsId, kind, file) {
 }
 
 function openCourseInNewTab() {
-  // 知识库：在新标签页打开渲染好的 HTML
+  // 知识库：在新标签页打开渲染好的页面
   if (currentView === 'docs' && currentFile) {
     const { root, relPath } = parseKbKey(currentFile);
-    const url = `/api/knowledge/view?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
+    // HTML 用 /kbfile 原样托管（相对资源可解析）；Markdown 用渲染视图
+    const url = currentKind === 'html'
+      ? `/kbfile/${rootIndexMap[root] != null ? rootIndexMap[root] : 0}/${relPath}`
+      : `/api/knowledge/view?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
     window.open(url, '_blank');
     return;
   }
@@ -965,7 +990,7 @@ async function showKnowledgeConfigDialog() {
   overlay.innerHTML = `
     <div class="dialog" style="min-width:520px">
       <h3>⚙ 知识库根目录</h3>
-      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录下的 <code>.md</code> 文件（排除 node_modules/.git/bin 等），按项目文件夹分组。文件保持原位，不复制。</div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录下的 <code>.md</code> / <code>.html</code> 文档（排除 node_modules/.git/bin 等），按项目文件夹分组。文件保持原位，不复制。</div>
       <div id="kb-roots-list" style="margin-bottom:12px"></div>
       <div style="display:flex;gap:6px;margin-bottom:16px">
         <input type="text" id="kb-new-root" placeholder="例如 C:/Work 或 C:/Work/AI" style="flex:1;margin-bottom:0">
@@ -1020,8 +1045,8 @@ function kbRenderList() {
     let badge;
     if (!p) badge = '<span style="font-size:11px;color:var(--text-secondary)">检查中…</span>';
     else if (!p.exists) badge = '<span style="font-size:11px;color:var(--danger)">✗ 不存在</span>';
-    else if (!p.mdCount) badge = '<span style="font-size:11px;color:var(--text-secondary)">0 个 .md</span>';
-    else badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.projects.join(', '))}">✓ ${p.mdCount} 个 · ${escapeHtml(p.projects.slice(0,3).join(', '))}${p.projects.length>3?'…':''}</span>`;
+    else if (!p.docCount) badge = '<span style="font-size:11px;color:var(--text-secondary)">0 个文档</span>';
+    else badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.projects.join(', '))}">✓ ${p.docCount} 个 · ${escapeHtml(p.projects.slice(0,3).join(', '))}${p.projects.length>3?'…':''}</span>`;
     return `
     <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-secondary)">
       <span style="flex:1;font-size:13px;font-family:monospace;word-break:break-all">${escapeHtml(r)}</span>
