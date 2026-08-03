@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f6feb"/>
+      <stop offset="1" stop-color="#8957e5"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#edf3fb"/>
+    </linearGradient>
+    <linearGradient id="spine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#dbe7fa"/>
+      <stop offset="1" stop-color="#b3c8ea"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景：蓝紫渐变圆角方块 -->
+  <rect width="128" height="128" rx="26" fill="url(#bg)"/>
+  <rect x="8" y="8" width="112" height="56" rx="20" fill="url(#gloss)"/>
+
+  <!-- 左页 -->
+  <path d="M64 40 C 50 30 30 30 20 40 L 20 95 C 30 85 50 85 64 95 Z" fill="url(#page)"/>
+  <!-- 右页 -->
+  <path d="M64 40 C 78 30 98 30 108 40 L 108 95 C 98 85 78 85 64 95 Z" fill="url(#page)"/>
+
+  <!-- 书脊 -->
+  <rect x="60" y="38" width="8" height="59" rx="3" fill="url(#spine)"/>
+
+  <!-- 左页文字线 -->
+  <rect x="32" y="54" width="22" height="4.5" rx="2.25" fill="#9db8e8"/>
+  <rect x="32" y="66" width="17" height="4.5" rx="2.25" fill="#9db8e8"/>
+  <!-- 右页文字线 -->
+  <rect x="74" y="54" width="22" height="4.5" rx="2.25" fill="#9db8e8"/>
+  <rect x="74" y="66" width="14" height="4.5" rx="2.25" fill="#9db8e8"/>
+</svg>

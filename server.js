@@ -415,7 +415,10 @@ app.use('/teach', (req, res, next) => {
   if (filePath !== ws.path && !filePath.startsWith(ws.path + path.sep)) {
     return res.status(400).send('无效路径');
   }
-  res.sendFile(filePath, err => {
+  // dotfiles: 'allow' —— workspace 可能位于 .scratch 等点开头的目录（teach 工作区），
+  // send 库默认 dotfiles:'ignore' 会对点目录直接 404（列表接口用 fs 直读不受影响，导致
+  // 「列表有课、点开 404」的假象）。
+  res.sendFile(filePath, { dotfiles: 'allow' }, err => {
     if (err && !res.headersSent) res.status(404).send('文件不存在');
   });
 });
