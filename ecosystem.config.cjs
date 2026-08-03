@@ -8,8 +8,8 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       min_uptime: '10s',
-      // 内存超 200MB 重启（防内存泄漏）
-      max_memory_restart: '200M',
+      // 内存超 1G 重启（chokidar 全盘 watch 知识库/课程 roots，常驻 400MB+；200M 阈值会误杀导致重启循环）
+      max_memory_restart: '1G',
       // 日志
       out_file: './logs/out.log',
       error_file: './logs/err.log',
