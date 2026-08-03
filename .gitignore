@@ -11,6 +11,9 @@ knowledge.config.json
 .vscode/
 .idea/
 
+# pi 本地状态
+.pi-glla/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -713,8 +713,32 @@ let currentView = 'docs';
 let currentCourse = null;   // { wsId, kind, file, title }
 let courseDataCache = [];   // 缓存课程列表数据
 // 课程列表展开状态（默认全部折叠）：workspace + 子分组
+// 持久化到 localStorage（与知识库文件树一致），刷新后保持
 const expandedCourseWs = new Set();
 const expandedCourseGroups = new Set();
+const COURSE_EXPANDED_WS_KEY = 'course-expanded-ws';
+const COURSE_EXPANDED_GROUPS_KEY = 'course-expanded-groups';
+
+function persistCourseExpanded() {
+  try {
+    localStorage.setItem(COURSE_EXPANDED_WS_KEY, JSON.stringify([...expandedCourseWs]));
+    localStorage.setItem(COURSE_EXPANDED_GROUPS_KEY, JSON.stringify([...expandedCourseGroups]));
+  } catch {}
+}
+function restoreCourseExpanded() {
+  try {
+    const ws = localStorage.getItem(COURSE_EXPANDED_WS_KEY);
+    if (ws) JSON.parse(ws).forEach(k => expandedCourseWs.add(k));
+    const g = localStorage.getItem(COURSE_EXPANDED_GROUPS_KEY);
+    if (g) JSON.parse(g).forEach(k => expandedCourseGroups.add(k));
+  } catch {}
+}
+// 打开课程时确保 workspace 与其分组展开，当前课程在树上可见（刷新/直接打开链接也能定位）
+function expandToCurrentCourse(wsId, kind) {
+  expandedCourseWs.add(wsId);
+  expandedCourseGroups.add(wsId + '|' + kind);
+  persistCourseExpanded();
+}
 
 // 视图切换：文档 / 课程
 function switchView(view) {
@@ -766,7 +790,7 @@ async function loadCourseList() {
     const wsCollapsed = !expandedCourseWs.has(ws.id);
     let inner = `<div class="ws-header" onclick="toggleCourseWs('${escapeAttr(ws.id)}')" title="折叠/展开">
       <span class="root-toggle ${wsCollapsed ? 'collapsed' : ''}">▼</span>
-      <span class="ws-name">🎓 ${escapeHtml(ws.name)}</span>
+      <span class="ws-name">🎓 ${escapeHtml(ws.title || ws.name)}</span>
       <span class="file-count">${total}</span>
     </div>`;
     if (!wsCollapsed) {
@@ -795,6 +819,7 @@ function renderCourseGroup(wsId, kind, label, files, filesHtml) {
 function toggleCourseWs(id) {
   if (expandedCourseWs.has(id)) expandedCourseWs.delete(id);
   else expandedCourseWs.add(id);
+  persistCourseExpanded();
   loadCourseList();
 }
 
@@ -802,18 +827,29 @@ function toggleCourseWs(id) {
 function toggleCourseGroup(key) {
   if (expandedCourseGroups.has(key)) expandedCourseGroups.delete(key);
   else expandedCourseGroups.add(key);
+  persistCourseExpanded();
   loadCourseList();
 }
 
 // 打开课程（用 iframe 展示，保持相对路径引用）
 // title 不由 onclick 传入（避免引号转义问题），改为从已缓存的课程列表查
-function openCourse(wsId, kind, file) {
+// fromHistory: 后退/前进恢复时不重复压入历史栈（与知识库 loadFile 一致）
+function openCourse(wsId, kind, file, fromHistory) {
   const ws = courseDataCache.find(w => w.id === wsId);
   const item = ws ? (ws[kind] || []).find(f => f.file === file) : null;
   const title = item ? item.title : file;
   currentCourse = { wsId, kind, file, title };
   isEditing = false;
   const src = `/teach/${encodeURIComponent(wsId)}/${kind}/${encodeURIComponent(file)}`;
+
+  // 浏览器历史：导航时压入历史栈，重载/后退恢复时不重复压入
+  if (!fromHistory) {
+    const state = { wsId, kind, file };
+    history.pushState({ course: state }, '', '#coursedoc=' + encodeURIComponent(JSON.stringify(state)));
+  }
+
+  // 确保当前课程所在 workspace/分组展开（刷新或直接打开链接时也能定位到该课程）
+  expandToCurrentCourse(wsId, kind);
 
   document.getElementById('toolbar').style.display = 'flex';
   document.getElementById('toolbar-always').style.display = 'none';
@@ -1139,6 +1175,7 @@ function handleKbLinkClick(e) {
 // 初始化
 (async () => {
   restoreExpandedFolders();
+  restoreCourseExpanded();
   await loadFileList();
   switchView('docs');
   document.getElementById('content').addEventListener('click', handleKbLinkClick);
@@ -1148,7 +1185,27 @@ function handleKbLinkClick(e) {
     const key = decodeURIComponent(m[1]);
     try { loadFile(key, true); } catch {}
   }
+  // 页面刷新后：从 URL hash 恢复上次查看的课程（切到课程视图并重新打开）
+  const cm = location.hash.match(/^#coursedoc=(.+)$/);
+  if (cm) {
+    try {
+      const c = JSON.parse(decodeURIComponent(cm[1]));
+      if (c && c.wsId && c.kind && c.file) {
+        switchView('courses');
+        await loadCourseList(); // 先填充 courseDataCache，openCourse 需要查标题
+        openCourse(c.wsId, c.kind, c.file, true);
+      }
+    } catch {}
+  }
 })();
+
+// 浏览器后退/前进：从历史状态恢复课程
+window.addEventListener('popstate', (e) => {
+  const c = (e.state && e.state.course) || null;
+  if (c) {
+    openCourse(c.wsId, c.kind, c.file, true);
+  }
+});
 
 // 浏览器后退/前进：从历史状态恢复文档
 window.addEventListener('popstate', (e) => {

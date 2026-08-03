@@ -309,7 +309,8 @@ function discoverWorkspaces() {
       let n = 2;
       while (usedIds.has(id)) { id = `${entry.name}-${n++}`; }
       usedIds.add(id);
-      workspaces.push({ id, name: entry.name, path: wsPath });
+      // 标题优先取 MISSION.md 的 "# Mission: xxx"，没有则回退文件夹名
+      workspaces.push({ id, name: entry.name, title: titleFromMission(wsPath) || entry.name, path: wsPath });
     }
   }
   return workspaces;
@@ -319,6 +320,16 @@ function discoverWorkspaces() {
 function titleFromHtml(html) {
   const m = html.match(/<title>([\s\S]*?)<\/title>/i);
   return m ? m[1].trim() : null;
+}
+
+// 从 workspace 根目录的 MISSION.md 提取标题（# Mission: xxx）
+// 课程树侧边栏标题优先用它，而不是文件夹名称
+function titleFromMission(wsPath) {
+  try {
+    const md = fs.readFileSync(path.join(wsPath, 'MISSION.md'), 'utf-8');
+    const m = md.match(/^#\s*Mission:?\s*(.+)$/m);
+    return m ? m[1].trim() : null;
+  } catch { return null; }
 }
 
 // 列出某个 workspace 下的课程与速查卡
@@ -353,6 +364,7 @@ app.get('/api/courses', (req, res) => {
     const workspaces = discoverWorkspaces().map(ws => ({
       id: ws.id,
       name: ws.name,
+      title: ws.title,
       ...getWorkspaceContent(ws.path),
     }));
     res.json({ workspaces });
