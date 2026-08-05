@@ -834,6 +834,11 @@ function refreshTeachWatcher() {
   if (workspaces.length === 0) return;
   teachWatcher = chokidar.watch(workspaces.map(ws => ws.path), {
     ignoreInitial: true,
+    // 排除构建/依赖目录，避免在大仓库上建立海量监听 handle
+    ignored: (p) => {
+      if (typeof p !== 'string' || !p) return false;
+      return DEFAULT_EXCLUDED.includes(path.basename(p).toLowerCase());
+    },
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
   teachWatcher.on('all', (event, filePath) => {
@@ -868,15 +873,39 @@ function refreshKnowledgeWatcher() {
 }
 refreshKnowledgeWatcher();
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`端口 ${PORT} 被占用，等待 PM2 重试...`);
-    process.exit(0);
+// 端口占用统一处理：HTTP server 与 WebSocketServer 都可能 emit 'error'。
+// 关键：new WebSocketServer({ server }) 会让端口冲突错误从 wss 实例 emit，
+// 只给 server 注册 error handler 收不到，必须 wss 也注册，否则 Unhandled error 崩溃。
+function handleListenError(err) {
+  if (err && err.code === 'EADDRINUSE') {
+    // 端口未释放（通常是 PM2 超内存重启的竞态）：退出码 1 让 PM2 按 restart_delay 重试
+    console.error(`端口 ${PORT} 被占用，PM2 将在 restart_delay 后重试...`);
+    process.exit(1);
   }
   throw err;
-});
+}
+server.on('error', handleListenError);
+wss.on('error', handleListenError);
 
 server.listen(PORT, () => {
   console.log(`Markdown 查看器已启动: http://localhost:${PORT}`);
   console.log(`文档目录: ${DOCS_DIR}`);
 });
+
+// 优雅关闭：收到信号时关闭所有监听器与连接，确保 TCP 端口及时释放
+// 修复 PM2 超内存重启时旧进程端口未释放 → 新进程 EADDRINUSE → 连续崩溃被放弃的问题
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`收到 ${signal}，正在优雅关闭...`);
+  try { watcher && watcher.close(); } catch {}
+  try { teachWatcher && teachWatcher.close(); } catch {}
+  try { knowledgeWatcher && knowledgeWatcher.close(); } catch {}
+  try { wss.close(); } catch {}
+  server.close(() => process.exit(0));
+  // 兜底：3 秒后强制退出，避免 server.close 卡住导致端口不释放
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

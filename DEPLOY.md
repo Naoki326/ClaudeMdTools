@@ -7,15 +7,15 @@
 | 项目 | 值 |
 |------|-----|
 | 进程名 | `claudemd` |
-| 端口 | `8080` |
+| 端口 | `30142` |
 | 入口 | `server.js` |
-| 工作目录 | `C:\Work\ClaudeMdTools` |
-| 日志目录 | `C:\Work\ClaudeMdTools\logs\` |
+| 工作目录 | `C:\Users\Naoki\Works\ClaudeMdTools` |
+| 日志目录 | `C:\Users\Naoki\Works\ClaudeMdTools\logs\` |
 | PM2 配置 | `ecosystem.config.cjs` |
 | 进程快照 | `C:\Users\Naoki\.pm2\dump.pm2` |
 | 开机自启 | 启动文件夹 → `claudemd-autostart.vbs` |
 
-访问：http://localhost:8080
+访问：http://localhost:30142
 
 ## 常用命令
 
@@ -38,8 +38,8 @@ pm2 resurrect
 
 ## 自动运行机制
 
-1. **进程管理（PM2）**：`server.js` 由 PM2 守护，崩溃自动重启（`autorestart: true`，内存超 200MB 也会重启）。
-2. **开机/登录自启**：`启动文件夹` 里的 `claudemd-autostart.vbs` 在登录时静默执行 `pm2 resurrect`，从 `dump.pm2` 恢复进程列表。无控制台黑窗口。
+1. **进程管理（PM2）**：`server.js` 由 PM2 守护，崩溃自动重启（`autorestart: true`，内存超 500MB 也会重启，重启间隔 5 秒避免端口竞态）。
+2. **开机/登录自启**：`启动文件夹` 里的 `claudemd-autostart.vbs` 在登录时静默执行 `pm2 resurrect && pm2 start ecosystem.config.cjs`，从 `dump.pm2` 恢复进程列表（含 errored 进程也能拉起）。无控制台黑窗口。
 
 > 因为当前是普通用户权限（非管理员），无法注册成「开机即起」的原生 Windows 服务（那需要管理员）。如需「开机即起、无需登录」，以管理员身份改用 `node-windows` 或 `nssm`，见下文「升级为原生 Windows 服务」。
 
@@ -58,6 +58,30 @@ pm2 delete claudemd
 pm2 save
 # 删除自启脚本
 rm "C:/Users/Naoki/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/claudemd-autostart.vbs"
+```
+
+## 排错：开机后服务没起来
+
+历史上出现过“自启后崩溃被放弃”的问题，根因链：
+
+1. `server.js` 监听大型知识库目录（如 `RobimSrc` 29k+ 文件）占用较高内存 → 触发 `max_memory_restart` 重启
+2. PM2 超内存重启时旧进程端口未释放 → 新进程 `EADDRINUSE` 崩溃 → 连续重试 → 被判为 errored 放弃
+
+已做的加固（见 `server.js` / `ecosystem.config.cjs`）：
+
+- **`wss.on('error')` + `server.on('error')`**：端口冲突从 `WebSocketServer` 实例 emit，必须两者都注册，否则进程崩溃（已修复）
+- **优雅关闭**：收到 `SIGTERM`/`SIGINT` 时关闭所有 `chokidar` watcher、`WebSocketServer`、`http.Server` 再退出，确保端口及时释放
+- **`restart_delay: 5000`**：重启间隔 5 秒，给 TCP 端口留出释放时间
+- **`max_memory_restart: 500M`**：监听大目录内存开销高，放宽阈值
+
+若仍遇到问题，排查步骤：
+
+```bash
+pm2 logs claudemd --lines 50     # 看崩溃原因
+tail -20 logs/err.log            # 看是否 EADDRINUSE
+netstat -ano | grep 30142        # 看端口占用者
+# 若有脱管孤儿进程占着端口：
+powershell "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*ProcessContainerFork*' } | Select ProcessId,CommandLine"
 ```
 
 ## 升级为原生 Windows 服务（可选，需管理员）
