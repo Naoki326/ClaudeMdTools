@@ -775,7 +775,10 @@ app.use('/kb/', (req, res, next) => {
 // HTML 文档用 iframe 展示时，其内部的相对路径资源（同目录 css/js/图片等）
 // 会在浏览器中按 /kbfile/<rootIndex>/<同目录> 解析，保证文档完整可显示。
 app.use('/kbfile', (req, res) => {
-  const rest = req.path.replace(/^\/+/, ''); // <rootIndex>/<relPath...>
+  // 路径可能含 URL 编码的中文等字符（如 报告.html），必须先解码再解析文件路径
+  let rest;
+  try { rest = decodeURIComponent(req.path).replace(/^\/+/, ''); } // <rootIndex>/<relPath...>
+  catch { return res.status(404).send('文件不存在'); }
   const slashIdx = rest.indexOf('/');
   const rootIdx = parseInt(slashIdx === -1 ? rest : rest.slice(0, slashIdx), 10);
   const relPath = slashIdx === -1 ? '' : rest.slice(slashIdx + 1);
