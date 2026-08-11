@@ -284,7 +284,8 @@ function toggleSidebar() {
   }
 })();
 
-// marked 配置：mermaid 代码块输出为 <div class="mermaid">，其他走 highlight.js
+// marked 配置：mermaid 代码块输出为 <div class="mermaid">，其他走 highlight.js；
+// 图片相对路径重写 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
 const renderer = new marked.Renderer();
 renderer.code = function(code, lang) {
   if (lang === 'mermaid') {
@@ -295,6 +296,24 @@ renderer.code = function(code, lang) {
     return '<pre><code class="hljs language-' + lang + '">' + hljs.highlight(code, { language: lang }).value + '</code></pre>';
   }
   return '<pre><code class="hljs">' + hljs.highlightAuto(code).value + '</code></pre>';
+};
+// marked v12：code 回调传 token 对象，但 image 回调是旧式 (href, title, text) 多参数！
+renderer.image = function(href, title, text) {
+  const ctx = window._kbCtx;
+  if (ctx && href && !/^(https?:|data:|<)/i.test(href)) {
+    const docDir = (ctx.docRelPath || '').replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const joined = (docDir ? docDir + '/' : '') + href;
+    // 规范化 ../ 和 ./（手写，避免依赖 URL 解析绝对化）
+    const parts = joined.split('/');
+    const out = [];
+    for (const seg of parts) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') { out.pop(); continue; }
+      out.push(seg);
+    }
+    href = '/kbfile/' + ctx.rootIndex + '/' + out.map(encodeURIComponent).join('/');
+  }
+  return '<img src="' + href + '"' + (title ? ' title="' + title + '"' : '') + ' alt="' + (text || '') + '">';
 };
 marked.setOptions({ renderer, breaks: true, gfm: true });
 
@@ -545,10 +564,15 @@ async function loadFile(key, fromHistory) {
   const sidebarCollapsed = document.querySelector('.sidebar').classList.contains('collapsed');
   document.getElementById('sidebar-open-btn').style.display = sidebarCollapsed ? '' : 'none';
 
+  // 设置图片路径重写上下文（renderer.image 使用）
+  window._kbCtx = {
+    rootIndex: rootIndexMap[root] != null ? rootIndexMap[root] : 0,
+    docRelPath: relPath
+  };
   const content = document.getElementById('content');
   if (currentKind === 'html') {
     // HTML 文档：用 iframe 原样展示（/kbfile 托管保证同目录相对资源可解析）
-    const idx = rootIndexMap[root] != null ? rootIndexMap[root] : 0;
+    const idx = window._kbCtx.rootIndex;
     const iframeSrc = `/kbfile/${idx}/${relPath}`;
     content.innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(iframeSrc)}"></iframe>`;
   } else {
