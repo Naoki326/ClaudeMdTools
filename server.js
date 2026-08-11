@@ -664,6 +664,7 @@ app.get('/api/knowledge/view', (req, res) => {
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
+<script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
 <style>
 body{max-width:860px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.6;color:#1f2328}
 pre{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:16px;overflow-x:auto}
@@ -675,9 +676,21 @@ th,td{padding:8px 13px;border:1px solid #d0d7de}
 th{background:#f6f8fa;font-weight:600}
 img{max-width:100%}
 @media(prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre{background:#161b22;border-color:#30363d}code{background:#21262d}blockquote{color:#8b949e;border-color:#30363d}th{background:#161b22}}
+html[data-theme="light"] body{color:#1f2328;background:#fff}
+html[data-theme="light"] pre{background:#f6f8fa;border-color:#d0d7de}
+html[data-theme="light"] code{background:#e8ecf0}
+html[data-theme="light"] blockquote{color:#656d76;border-color:#d0d7de}
+html[data-theme="light"] th{background:#f6f8fa}
+html[data-theme="dark"] body{background:#0d1117;color:#e6edf3}
+html[data-theme="dark"] pre{background:#161b22;border-color:#30363d}
+html[data-theme="dark"] code{background:#21262d}
+html[data-theme="dark"] blockquote{color:#8b949e;border-color:#30363d}
+html[data-theme="dark"] th{background:#161b22}
+html[data-theme="dark"] a{color:#58a6ff}
 </style></head><body>
+<button id="theme-toggle" onclick="toggleTheme()" title="切换主题" style="position:fixed;top:12px;right:12px;z-index:999;font-size:18px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:4px 10px;cursor:pointer">🌙</button>
 ${marked.parse(content)}
-<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));if(window.mermaid&&document.querySelector('.mermaid')){mermaid.initialize({startOnLoad:false,theme:window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'default',securityLevel:'loose'});try{mermaid.run({nodes:document.querySelectorAll('.mermaid')})}catch(e){}}document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
+<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));function kbTheme(){var t;try{t=localStorage.getItem('theme')}catch(e){}return t?t:(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')}function applyTheme(theme){document.documentElement.setAttribute('data-theme',theme==='dark'?'dark':'light');document.getElementById('theme-toggle').textContent=theme==='dark'?'☀️':'🌙'}function applyMermaid(){if(window.mermaid&&document.querySelector('.mermaid')){mermaid.initialize({startOnLoad:false,theme:kbTheme()==='dark'?'dark':'default',securityLevel:'loose'});try{mermaid.run({nodes:document.querySelectorAll('.mermaid')})}catch(e){}}}function toggleTheme(){var dark=kbTheme()==='dark';var next=dark?'light':'dark';try{localStorage.setItem('theme',next)}catch(e){}applyTheme(next);applyMermaid()}applyTheme(kbTheme());applyMermaid();window.addEventListener('storage',function(e){if(e.key==='theme'){applyTheme(e.newValue==='dark'?'dark':'light');applyMermaid()}});document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
 </body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
