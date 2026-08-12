@@ -65,6 +65,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 /* 按钮 */
 .icon-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text); font-size: 14px; transition: background 0.15s; }
 .icon-btn:hover { background: var(--bg-tertiary); }
+.icon-btn.active { color: var(--accent); border-color: var(--accent); background: var(--bg-tertiary); }
 .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
 .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-hover); }
@@ -78,8 +79,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .content { flex: 1; overflow: hidden; display: flex; }
 
 /* Markdown 渲染区 */
-.markdown-view { flex: 1; overflow-y: auto; padding: 32px 40px; }
-.markdown-body { max-width: 860px; margin: 0 auto; line-height: 1.6; }
+.markdown-view { flex: 1; overflow-y: auto; padding: 32px 40px; display: flex; align-items: flex-start; }
+.markdown-body { flex: 1 1 0; min-width: 0; max-width: 860px; margin: 0 auto; line-height: 1.6; }
+
+/* 目录（TOC）侧栏 */
+.toc-pane { width: 250px; flex-shrink: 0; position: sticky; top: 0; max-height: calc(100vh - 64px); overflow-y: auto; margin-left: 32px; border-left: 1px solid var(--border); padding-left: 16px; }
+.toc-pane.hidden { display: none; }
+.toc-header { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; user-select: none; }
+.toc-list { list-style: none; margin: 0; padding: 0; }
+.toc-list .toc-list { padding-left: 12px; }
+.toc-item { margin: 1px 0; }
+.toc-item a { display: block; padding: 3px 8px; border-radius: 4px; color: var(--text-secondary); font-size: 13px; line-height: 1.4; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-item a:hover { color: var(--text); background: var(--bg-tertiary); }
+.toc-item.active > a { color: var(--accent); font-weight: 600; background: var(--bg-tertiary); }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; line-height: 1.25; }
 .markdown-body h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
 .markdown-body h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
@@ -211,6 +223,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
     <button class="btn btn-primary" id="save-btn" onclick="saveFile()" style="display:none">保存</button>
     <button class="btn" id="cancel-btn" onclick="cancelEdit()" style="display:none">取消</button>
     <button class="btn" id="open-btn" onclick="openCourseInNewTab()" style="display:none">↗ 新窗口打开</button>
+    <button class="icon-btn" id="toc-btn" onclick="toggleToc()" title="显示/隐藏目录" style="display:none">📑 目录</button>
   </div>
   <div class="content" id="content">
     <div class="empty-state">
@@ -549,6 +562,8 @@ async function loadFile(key, fromHistory) {
   const data = await res.json();
   originalContent = data.content;
   currentKind = data.kind === 'html' ? 'html' : 'md';
+  // 剥离 YAML frontmatter 仅用于展示（编辑用 originalContent 保留原文，避免保存时丢元数据）
+  const displayContent = currentKind === 'md' ? stripFrontmatter(data.content) : data.content;
 
   document.getElementById('toolbar').style.display = 'flex';
   document.getElementById('toolbar-always').style.display = 'none';
@@ -559,6 +574,8 @@ async function loadFile(key, fromHistory) {
   document.getElementById('open-btn').style.display = '';
   const cached = fileDataCache.find(f => f.key === key);
   document.getElementById('file-title').textContent = cached ? cached.title : relPath;
+  // Markdown 文档：显示目录切换按钮；HTML 文档：隐藏
+  document.getElementById('toc-btn').style.display = currentKind === 'md' ? '' : 'none';
 
   // 更新侧边栏展开按钮可见性
   const sidebarCollapsed = document.querySelector('.sidebar').classList.contains('collapsed');
@@ -575,11 +592,22 @@ async function loadFile(key, fromHistory) {
     const idx = window._kbCtx.rootIndex;
     const iframeSrc = `/kbfile/${idx}/${relPath}`;
     content.innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(iframeSrc)}"></iframe>`;
+    // HTML 文档无目录，清理旧 TOC 状态
+    if (tocObserver) { tocObserver.disconnect(); tocObserver = null; }
+    const pane = document.getElementById('toc-pane');
+    if (pane) { pane.innerHTML = ''; pane.classList.add('hidden'); }
   } else {
-    content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(data.content)}</div></div>`;
+    content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(displayContent)}</div><div class="toc-pane" id="toc-pane"></div></div>`;
     // 渲染 mermaid 图表（若文档中有）
     if (window.mermaid && content.querySelector('.mermaid')) {
       try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
+    }
+    // 构建文档目录（标题锚点 + 嵌套 TOC + 滚动高亮）
+    renderToc();
+    const viewEl = content.querySelector('.markdown-view');
+    if (viewEl) {
+      viewEl.removeEventListener('scroll', onTocScroll);
+      viewEl.addEventListener('scroll', onTocScroll);
     }
   }
 
@@ -718,6 +746,184 @@ async function deleteFile(name) {
 // 工具函数
 function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 剥离 YAML frontmatter（与 server.js stripFrontmatter 同规则）：仅用于展示，编辑保留原文
+function stripFrontmatter(content) {
+  const s = String(content || '');
+  const m = s.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!m) return s;
+  const fmBody = m[0].replace(/^---\r?\n/, '').replace(/\r?\n---\r?\n?$/, '');
+  if (!fmBody || !/^[A-Za-z_][\w.-]*\s*:/.test(fmBody)) return s;
+  return s.slice(m[0].length);
+}
+
+// ============================================================
+// Markdown 目录（TOC）
+// ============================================================
+let tocVisible = true; // 目录栏显示状态（默认展开）
+let tocObserver = null; // 当前滚动高亮的 IntersectionObserver
+let tocTimer = null;
+
+// 保存上次高亮的标题元素，用于在子标题激活时淡出父级高亮
+function setTocActive(el, isChild) {
+  document.querySelectorAll('.toc-item.active').forEach(x => x.classList.remove('active'));
+  if (!el) return;
+  el.classList.add('active');
+  if (!isChild && el.parentElement && el.parentElement.classList.contains('toc-list')) {
+    // 父级标题高亮时，清除其子标题列表的高亮（同段深层高亮较分散）
+    el.parentElement.querySelectorAll('.toc-item.active').forEach(x => x.classList.remove('active'));
+  }
+}
+
+function onTocScroll() {
+  if (tocTimer) return;
+  tocTimer = setTimeout(() => { tocTimer = null; updateTocActive(); }, 80);
+}
+
+// 查找给定级别之下最接近的目录项（用于折叠父级时子标题仍可高亮）
+function findTocItem(level, heading) {
+  const levels = [2, 3, 4, 5, 6];
+  const start = levels.indexOf(level);
+  if (start < 0) return null;
+  for (let i = start; i < levels.length; i++) {
+    const id = heading.querySelector('h' + levels[i])?.id;
+    if (id && document.querySelector(`.toc-item a[href="#${CSS.escape(id)}"]`)) {
+      return document.querySelector(`.toc-item a[href="#${CSS.escape(id)}"]`)?.closest('.toc-item');
+    }
+  }
+  return null;
+}
+
+// 更新目录高亮：找到当前视口内最靠上的可见标题
+function updateTocActive() {
+  if (!currentFile || currentKind !== 'md' || !document.querySelector('.toc-pane')) return;
+  const view = document.querySelector('.markdown-view');
+  if (!view) return;
+  const scrollTop = view.scrollTop;
+  const headings = view.querySelectorAll('.markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6');
+  const viewportBottom = scrollTop + view.clientHeight;
+  let target = null;
+  let targetLevel = 0;
+  for (const h of headings) {
+    const r = h.getBoundingClientRect();
+    if (r.bottom >= 40) {
+      if (r.top <= viewportBottom) {
+        // 取第一个顶部在视口内（或刚滚过）的标题——即当前正在阅读的章节
+        if (!target) { target = h; targetLevel = parseInt(h.tagName[1], 10); break; }
+      }
+    }
+  }
+  if (!target) target = headings[0];
+  if (!target) return;
+  const targetId = target.id;
+  const a = document.querySelector(`.toc-item a[href="#${CSS.escape(targetId)}"]`);
+  if (a) setTocActive(a.closest('.toc-item'), false);
+  else setTocActive(findTocItem(targetLevel, target), true);
+}
+
+// 构建目录：提取渲染后文档的所有标题，生成嵌套列表，给标题加锚点 id
+function renderToc() {
+  const pane = document.getElementById('toc-pane');
+  const view = document.querySelector('.markdown-view');
+  const body = view ? view.querySelector('.markdown-body') : null;
+  if (!pane || !body) return;
+  const levels = [2, 3, 4, 5, 6];
+  const headings = body.querySelectorAll('h2, h3, h4, h5, h6');
+  // 为所有标题补上锚点 id（h1 为文档标题，通常不进入目录）；重复标题加 -2/-3 后缀（与渲染页 tocJs 一致）
+  const slugCounts = {};
+  headings.forEach((h) => {
+    if (!h.id) {
+      const base = (h.textContent || '').trim().replace(/[^\w\u4e00-\u9fa5-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'section';
+      const n = (slugCounts[base] = (slugCounts[base] || 0) + 1);
+      h.id = n === 1 ? base : base + '-' + n;
+    }
+  });
+  const root = document.createElement('ul');
+  root.className = 'toc-list';
+  // 两遍法建树：先建所有 li，再用栈挂接嵌套（避免空 ul / li 丢失）
+  const items = Array.from(headings).map(h => {
+    const li = document.createElement('li');
+    li.className = 'toc-item';
+    const a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = (h.textContent || '').trim();
+    a.title = a.textContent;
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const viewEl = document.querySelector('.markdown-view');
+      if (viewEl) {
+        const top = h.getBoundingClientRect().top + viewEl.scrollTop - viewEl.getBoundingClientRect().top - 16;
+        viewEl.scrollTo({ top, behavior: 'smooth' });
+      }
+    });
+    li.appendChild(a);
+    return { level: parseInt(h.tagName[1], 10), li };
+  });
+  const stack = [{ level: 1, holder: root }];
+  for (const it of items) {
+    while (stack.length > 1 && it.level <= stack[stack.length - 1].level) stack.pop();
+    const top = stack[stack.length - 1];
+    if (top.holder.tagName === 'UL') {
+      top.holder.appendChild(it.li);
+    } else {
+      // top.holder 是 li：取其子 ul，无则创建
+      let childUl = null;
+      for (const c of top.holder.children) { if (c.tagName === 'UL') { childUl = c; break; } }
+      if (!childUl) { childUl = document.createElement('ul'); childUl.className = 'toc-list'; top.holder.appendChild(childUl); }
+      childUl.appendChild(it.li);
+    }
+    stack.push({ level: it.level, holder: it.li });
+  }
+  // 清空旧的目录和监听器
+  if (tocObserver) { tocObserver.disconnect(); tocObserver = null; }
+  pane.innerHTML = '';
+  if (headings.length === 0) {
+    pane.classList.add('hidden');
+    document.getElementById('toc-btn').style.display = 'none';
+    return;
+  }
+  pane.classList.remove('hidden');
+  document.getElementById('toc-btn').style.display = '';
+  const header = document.createElement('div');
+  header.className = 'toc-header';
+  header.textContent = '目录';
+  pane.appendChild(header);
+  pane.appendChild(root);
+  // 滚动高亮：标题进入视口时高亮对应目录项
+  tocObserver = new IntersectionObserver((entries) => {
+    let topEntry = null;
+    for (const en of entries) {
+      if (en.isIntersecting && (!topEntry || en.boundingClientRect.top < topEntry.boundingClientRect.top)) topEntry = en;
+    }
+    if (topEntry) {
+      const id = topEntry.target.id;
+      const a = document.querySelector(`.toc-item a[href="#${CSS.escape(id)}"]`);
+      if (a) setTocActive(a.closest('.toc-item'), false);
+    }
+  }, { root: document.querySelector('.markdown-view'), rootMargin: '-40px 0px -70% 0px' });
+  headings.forEach(h => tocObserver.observe(h));
+  updateTocActive();
+}
+
+// 切换目录栏显示/隐藏
+function toggleToc() {
+  const pane = document.getElementById('toc-pane');
+  const btn = document.getElementById('toc-btn');
+  if (!pane) return;
+  tocVisible = !tocVisible;
+  pane.classList.toggle('hidden', !tocVisible);
+  btn.classList.toggle('active', tocVisible);
+  try { localStorage.setItem('toc-visible', tocVisible ? '1' : ''); } catch {}
+}
+
+// 恢复目录栏显示状态（刷新后保持）
+function restoreTocState() {
+  try { tocVisible = localStorage.getItem('toc-visible') !== '0'; } catch {}
+  const pane = document.getElementById('toc-pane');
+  const btn = document.getElementById('toc-btn');
+  if (pane) pane.classList.toggle('hidden', !tocVisible);
+  if (btn) btn.classList.toggle('active', tocVisible);
 }
 
 function showToast(msg) {
@@ -1200,6 +1406,7 @@ function handleKbLinkClick(e) {
 (async () => {
   restoreExpandedFolders();
   restoreCourseExpanded();
+  restoreTocState();
   await loadFileList();
   switchView('docs');
   document.getElementById('content').addEventListener('click', handleKbLinkClick);

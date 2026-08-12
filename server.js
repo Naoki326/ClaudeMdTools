@@ -527,6 +527,39 @@ function titleFromHtml(content) {
   return null;
 }
 
+// 从 Markdown 提取目录（标题列表）：只取 ## ~ ######（h1 视为文档标题不入目录）
+// 返回 [{ level, text }]
+// 注意：仅用于读取文档标题信息，实际锚点 id 由渲染页客户端基于 DOM 生成（与 index.html 一致）
+function tocFromMarkdown(content) {
+  const toc = [];
+  const lines = String(content || '').split(/\r?\n/);
+  let inFence = false;
+  for (const line of lines) {
+    const fence = line.match(/^\s*(```+|~~~+)/);
+    if (fence) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const m = line.match(/^(#{2,6})\s+(.+?)\s*#*\s*$/);
+    if (!m) continue;
+    const level = m[1].length;
+    const text = m[2].replace(/\\([`*_\[\]])/g, '$1').replace(/[*_~`]/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
+    if (!text) continue;
+    toc.push({ level, text });
+  }
+  return toc;
+}
+
+// 剥离 YAML frontmatter（文件以 --- 开头的元数据块），避免被 marked 误渲染为标题
+// 严格匹配：首行必须是 --- 且存在配对 ---，否则原样返回（不误伤水平线）
+function stripFrontmatter(content) {
+  const s = String(content || '');
+  const m = s.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  if (!m) return s;
+  // frontmatter 内第二行通常是键值对（name:/description:/metadata:），防止把正文首行 --- 误判
+  const fmBody = m[0].replace(/^---\r?\n/, '').replace(/\r?\n---\r?\n?$/, '');
+  if (!fmBody || !/^[A-Za-z_][\w.-]*\s*:/.test(fmBody)) return s;
+  return s.slice(m[0].length);
+}
+
 // /kbfile 静态托管允许的文件类型（HTML 文档及其相对资源）
 const KB_STATIC_EXTS = ['.html', '.htm', '.css', '.js', '.mjs', '.json', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.pdf'];
 
@@ -665,16 +698,27 @@ app.get('/api/knowledge/view', (req, res) => {
       res.send(content);
       return;
     }
+    // Markdown：剥离 YAML frontmatter（避免被 marked 误渲染成标题/正文）
+    const mdContent = stripFrontmatter(content);
     // 收集当前 root 下所有文档路径，供前端链接跳转回退查找
     const rootPath = resolveRoot(String(root));
     const allFiles = [];
     scanKnowledgeFiles(rootPath, rootPath, allFiles);
     const fileSet = allFiles.map(f => f.rel);
-    const title = titleFromMarkdown(content) || path.basename(relPath);
+    const title = titleFromMarkdown(mdContent) || path.basename(relPath);
+    // 目录数据（h2~h6）——仅作为服务端标记，实际 TOC 由客户端基于 DOM 构建（slug 规则与 index.html 完全一致）
+    const toc = tocFromMarkdown(mdContent);
     // 图片路径重写上下文：渲染前设置，供 renderer.image 把相对路径转成 /kbfile 地址
     const roots = readKnowledgeConfig().roots || [];
     const rootIndex = roots.findIndex(x => resolveRoot(x) === rootPath);
     kbRenderer._kbCtx = { rootIndex: rootIndex === -1 ? 0 : rootIndex, docRelPath: String(relPath) };
+    // 目录 nav 占位：客户端 JS 基于渲染后的 DOM 构建嵌套 TOC 并生成锚点 id
+    const tocHtml = toc.length ? '<nav class="toc" id="toc-nav"></nav>' : '';
+    // 客户端脚本：给 .article 下的标题补锚点 id，构建嵌套目录，点击平滑滚动，滚动高亮
+    // slug 规则与 index.html 的 renderToc 完全一致：textContent → [^\w\u4e00-\u9fa5-]+ → '-'，重复加 -2/-3
+    const tocJs = toc.length
+      ? `;(function(){var art=document.querySelector('.article');if(!art)return;var hs=Array.prototype.slice.call(art.querySelectorAll('h2,h3,h4,h5,h6'));if(!hs.length)return;var counts={};hs.forEach(function(h,i){if(!h.id){var base=(h.textContent||'').trim().replace(/[^\\w\\u4e00-\\u9fa5-]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase()||'section';var n=(counts[base]=(counts[base]||0)+1);h.id=n===1?base:base+'-'+n;}});var nav=document.getElementById('toc-nav');if(!nav)return;var head=document.createElement('div');head.className='toc-header';head.textContent='目录';nav.appendChild(head);var items=hs.map(function(h){var li=document.createElement('li');var a=document.createElement('a');a.href='#'+h.id;a.textContent=h.textContent;a.title=a.textContent;a.addEventListener('click',function(e){e.preventDefault();var id=this.getAttribute('href').slice(1);var th=document.getElementById(id);if(th)th.scrollIntoView({behavior:'smooth',block:'start'})});li.appendChild(a);return{level:parseInt(h.tagName[1],10),li:li}});var root=document.createElement('ul');nav.appendChild(root);var stack=[{level:1,holder:root}];items.forEach(function(it){while(stack.length>1&&it.level<=stack[stack.length-1].level)stack.pop();var top=stack[stack.length-1];if(top.holder.tagName==='UL'){top.holder.appendChild(it.li)}else{var childUl=null;var chs=top.holder.children;for(var ci=0;ci<chs.length;ci++){if(chs[ci].tagName==='UL'){childUl=chs[ci];break}}if(!childUl){childUl=document.createElement('ul');top.holder.appendChild(childUl)}childUl.appendChild(it.li)}stack.push({level:it.level,holder:it.li})});var act=null;function setAct(a){if(act)act.classList.remove('active');act=a;if(act)act.classList.add('active')}if(typeof IntersectionObserver!=='undefined'){var spy=new IntersectionObserver(function(entries){var top=null;entries.forEach(function(en){if(en.isIntersecting&&(!top||en.boundingClientRect.top<top.boundingClientRect.top))top=en});if(top){var a=nav.querySelector('a[href="#'+top.target.id+'"]');if(a)setAct(a)}},{rootMargin:'-80px 0px -70% 0px'});hs.forEach(function(h){spy.observe(h)})}})();`
+      : '';
     const html = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -685,8 +729,18 @@ app.get('/api/knowledge/view', (req, res) => {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
 <script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
 <style>
-body{max-width:860px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.6;color:#1f2328}
-h1,h2,h3,h4,h5,h6{margin-top:24px;margin-bottom:16px;font-weight:600;line-height:1.25}
+body{max-width:1140px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.6;color:#1f2328}
+.layout{display:flex;gap:32px;align-items:flex-start}
+.article{flex:1;min-width:0;max-width:860px}
+.toc{width:250px;flex-shrink:0;position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;font-size:14px}
+.toc-header{font-weight:600;margin-bottom:8px}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc ul ul{padding-left:12px}
+.toc li{margin:1px 0}
+.toc a{display:block;padding:3px 8px;border-radius:4px;color:#656d76;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toc a:hover{color:#1f2328;background:#f6f8fa}
+.toc a.active{color:#0969da;font-weight:600;background:#f6f8fa}
+h1,h2,h3,h4,h5,h6{margin-top:24px;margin-bottom:16px;font-weight:600;line-height:1.25;scroll-margin-top:16px}
 h1{font-size:2em;padding-bottom:.3em;border-bottom:1px solid #d0d7de}
 h2{font-size:1.5em;padding-bottom:.3em;border-bottom:1px solid #d0d7de}
 h3{font-size:1.25em}
@@ -710,6 +764,9 @@ html[data-theme="light"] pre{background:#f6f8fa;border-color:#d0d7de}
 html[data-theme="light"] code{background:#e8ecf0}
 html[data-theme="light"] blockquote{color:#656d76;border-color:#d0d7de}
 html[data-theme="light"] th{background:#f6f8fa}
+html[data-theme="light"] .toc a{color:#656d76}
+html[data-theme="light"] .toc a:hover{color:#1f2328;background:#f6f8fa}
+html[data-theme="light"] .toc a.active{color:#0969da;background:#f6f8fa}
 html[data-theme="light"] h1,html[data-theme="light"] h2{border-bottom-color:#d0d7de}
 html[data-theme="light"] hr{border-top-color:#d0d7de}
 html[data-theme="light"] a{color:#0969da}
@@ -718,13 +775,21 @@ html[data-theme="dark"] pre{background:#161b22;border-color:#30363d}
 html[data-theme="dark"] code{background:#21262d}
 html[data-theme="dark"] blockquote{color:#8b949e;border-color:#30363d}
 html[data-theme="dark"] th{background:#161b22}
+html[data-theme="dark"] .toc a{color:#8b949e}
+html[data-theme="dark"] .toc a:hover{color:#e6edf3;background:#161b22}
+html[data-theme="dark"] .toc a.active{color:#58a6ff;background:#161b22}
 html[data-theme="dark"] h1,html[data-theme="dark"] h2{border-bottom-color:#30363d}
 html[data-theme="dark"] hr{border-top-color:#30363d}
 html[data-theme="dark"] a{color:#58a6ff}
 </style></head><body>
 <button id="theme-toggle" onclick="toggleTheme()" title="切换主题" style="position:fixed;top:12px;right:12px;z-index:999;font-size:18px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:4px 10px;cursor:pointer">🌙</button>
-${marked.parse(content)}
-<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));function kbTheme(){var t;try{t=localStorage.getItem('theme')}catch(e){}return t?t:(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')}function applyTheme(theme){var dark=theme==='dark';document.documentElement.setAttribute('data-theme',dark?'dark':'light');document.getElementById('theme-toggle').textContent=dark?'☀️':'🌙';var hl=document.getElementById('hljs-light'),hd=document.getElementById('hljs-dark');if(hl&&hd){hl.disabled=dark;hd.disabled=!dark}}function applyMermaid(){if(window.mermaid&&document.querySelector('.mermaid')){mermaid.initialize({startOnLoad:false,theme:kbTheme()==='dark'?'dark':'default',securityLevel:'loose'});try{mermaid.run({nodes:document.querySelectorAll('.mermaid')})}catch(e){}}}function toggleTheme(){var dark=kbTheme()==='dark';var next=dark?'light':'dark';try{localStorage.setItem('theme',next)}catch(e){}applyTheme(next);applyMermaid()}applyTheme(kbTheme());applyMermaid();window.addEventListener('storage',function(e){if(e.key==='theme'){applyTheme(e.newValue==='dark'?'dark':'light');applyMermaid()}});document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
+<div class="layout">
+<div class="article">
+${marked.parse(mdContent)}
+</div>
+${tocHtml}
+</div>
+<script>var KB_FILES=${JSON.stringify(fileSet)};function norm(s){var p=[];s.split('/').forEach(function(seg){if(seg===''||seg==='.')return;if(seg==='..')p.pop();else p.push(seg)});return p.join('/')}function findTarget(clean,dir){var cands=clean.toLowerCase().indexOf('.md',clean.length-3)!==-1?[clean]:[clean,clean+'.md'];var i,rel,root2;for(i=0;i<cands.length;i++){rel=norm(dir?dir+'/'+cands[i]:cands[i]);if(KB_FILES.indexOf(rel)!==-1)return rel}for(i=0;i<cands.length;i++){root2=norm(cands[i]);if(KB_FILES.indexOf(root2)!==-1)return root2}return null}document.querySelectorAll('pre code').forEach(b=>hljs.highlightElement(b));function kbTheme(){var t;try{t=localStorage.getItem('theme')}catch(e){}return t?t:(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')}function applyTheme(theme){var dark=theme==='dark';document.documentElement.setAttribute('data-theme',dark?'dark':'light');document.getElementById('theme-toggle').textContent=dark?'☀️':'🌙';var hl=document.getElementById('hljs-light'),hd=document.getElementById('hljs-dark');if(hl&&hd){hl.disabled=dark;hd.disabled=!dark}}function applyMermaid(){if(window.mermaid&&document.querySelector('.mermaid')){mermaid.initialize({startOnLoad:false,theme:kbTheme()==='dark'?'dark':'default',securityLevel:'loose'});try{mermaid.run({nodes:document.querySelectorAll('.mermaid')})}catch(e){}}}function toggleTheme(){var dark=kbTheme()==='dark';var next=dark?'light':'dark';try{localStorage.setItem('theme',next)}catch(e){}applyTheme(next);applyMermaid()}applyTheme(kbTheme());applyMermaid();window.addEventListener('storage',function(e){if(e.key==='theme'){applyTheme(e.newValue==='dark'?'dark':'light');applyMermaid()}});${tocJs}document.body.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a');if(!a)return;var href=a.getAttribute('href');if(!href)return;if(/^(https?:|mailto:|tel:|file:|#)/i.test(href))return;var clean=href.split('#')[0].split('?')[0];if(!clean)return;var params=new URLSearchParams(window.location.search);var rp=params.get('path')||'';var rootEnc=encodeURIComponent(params.get('root')||'');var dir=rp.includes('/')?rp.slice(0,rp.lastIndexOf('/')):'';var finalTarget=findTarget(clean,dir);if(!finalTarget)return;e.preventDefault();window.location.href='/api/knowledge/view?root='+rootEnc+'&path='+encodeURIComponent(finalTarget)})</script>
 </body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
