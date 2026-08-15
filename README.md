@@ -2,9 +2,9 @@
 
 # 📚 ClaudeMd Tools
 
-**把散落在硬盘各处的 Markdown 笔记和 HTML 课程，装进一个浏览器标签页。**
+**把散落在硬盘各处的 Markdown 笔记和 HTML 课程，装进局域网里任意一块屏幕。**
 
-文件保持原位 · 改动实时刷新 · 在线编辑写回 · AI 可直接 URL 访问
+文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
 ![version](https://img.shields.io/badge/version-1.1.0-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
@@ -17,13 +17,13 @@
 
 ## 它解决什么问题
 
-你的笔记散落在几十个项目文件夹里：这个仓库一份 `SPEC.md`，那个 workspace 一堆 `/teach` 生成的课程。想集中翻阅？只能一个个开文件，或者复制到一处——然后副本开始过期。
+你的笔记散落在几十个项目文件夹里：这个仓库一份 `SPEC.md`，那个 workspace 一堆 `/teach` 生成的课程。想集中翻阅？只能一个个开文件，或者复制到一处——然后副本开始过期。更别提想在沙发上用平板翻笔记：文件锁在台式机里。
 
-**ClaudeMd Tools 反着来**：文件一个都不动。你告诉它去哪些目录找，它负责扫描、分类、渲染。原文件改了，浏览器里下一秒就变。
+**ClaudeMd Tools 反着来**：文件一个都不动。你告诉它去哪些目录找，它起一个常驻 Web 服务负责扫描、分类、渲染。原文件改了，浏览器里下一秒就变；服务挂着，同一局域网的电脑、手机、平板打开就是同一份知识库。
 
 ```
 C:/Work/weldone/openspec/specs/...   ─┐
-C:/Work/AI/lessons/*.html            ─┼─►  localhost:8080  ─►  一个页面全看
+C:/Work/AI/lessons/*.html            ─┼─►  局域网 Web 服务  ─►  电脑 / 手机 / 平板
 C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新）
 ```
 
@@ -39,6 +39,11 @@ C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新�
 
 ## ✨ 核心特性
 
+### 📱 跨设备随时看（主场景）
+
+- 服务监听所有网卡，PM2 常驻后，**手机 / 平板连同一 Wi-Fi，浏览器打开 `http://<电脑IP>:8080` 就是完整知识库**——无需同步、无需 app
+- 文件在电脑上改，手机上打开的页面实时刷新（chokidar 监听 + WebSocket 推送）
+
 ### 📚 知识库视图 — Markdown / HTML 文档
 
 - **树形目录浏览** — 按根目录展开项目结构，空文件夹自动隐藏，多层折叠
@@ -47,12 +52,12 @@ C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新�
 - **实时刷新** — 文件一变，页面自动更新（chokidar 监听 + WebSocket 推送）
 - **互联** — 文档间 `.md` 链接可点击跳转，浏览器前进/后退正常回溯
 
-### 🎓 课程视图 — HTML 教学网页
+### 🎓 课程视图 — /teach 生成的教学课程
 
-- 自动识别含 `lessons/` 目录的 workspace，整个目录树托管（`lessons/` + `reference/` + `assets/`），课程间相对引用不断链
-- 按 workspace 分组，课程 / 速查卡分类，可折叠
+- 为 [Matt Pocock 的 /teach 技能](https://www.aihero.dev/skills-teach)生成的教学 workspace 设计：自动识别含 `lessons/` 的目录，整个目录树托管（`lessons/` + `reference/` + `assets/`），课程间相对引用不断链
+- 按 workspace 分组，课程 / 速查卡分类，可折叠——在平板上连载学习体验很好
 
-### 🤖 AI 友好（独有能力）
+### 🤖 AI 友好
 
 给 AI 一个 URL，它就能自己发现并读取你的全部文档：
 
@@ -75,6 +80,8 @@ npm start
 首次启动是空的——点右上角 **⚙** 添加根目录（如 `C:/Work`），立即生效。
 
 > 端口默认 8080，`PORT=8090 npm start` 可改；PM2 部署时改 `ecosystem.config.cjs` 的 `env.PORT`。
+>
+> **手机 / 平板访问**：服务监听所有网卡，同一局域网设备浏览器打开 `http://<电脑局域网IP>:8080` 即可（电脑 IP 用 `ipconfig` 查）。配合 PM2 常驻，随时打开随时看。
 
 ## ⚙️ 配置根目录
 
