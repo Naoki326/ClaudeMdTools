@@ -761,7 +761,7 @@ function stripFrontmatter(content) {
 // ============================================================
 // Markdown 目录（TOC）
 // ============================================================
-let tocVisible = true; // 目录栏显示状态（默认展开）
+let tocVisible = false; // 目录栏显示状态（默认收起，点击 📑 展开）
 let tocObserver = null; // 当前滚动高亮的 IntersectionObserver
 let tocTimer = null;
 
@@ -883,8 +883,11 @@ function renderToc() {
     document.getElementById('toc-btn').style.display = 'none';
     return;
   }
-  pane.classList.remove('hidden');
+  // 目录栏显隐跟随 tocVisible（默认收起）；按钮始终可见用于展开
+  pane.classList.toggle('hidden', !tocVisible);
   document.getElementById('toc-btn').style.display = '';
+  const btn = document.getElementById('toc-btn');
+  if (btn) btn.classList.toggle('active', tocVisible);
   const header = document.createElement('div');
   header.className = 'toc-header';
   header.textContent = '目录';
@@ -919,7 +922,8 @@ function toggleToc() {
 
 // 恢复目录栏显示状态（刷新后保持）
 function restoreTocState() {
-  try { tocVisible = localStorage.getItem('toc-visible') !== '0'; } catch {}
+  // 默认收起（用户未设置过时视为隐藏）；仅当显式存过 '1' 才展开
+  try { tocVisible = localStorage.getItem('toc-visible') === '1'; } catch {}
   const pane = document.getElementById('toc-pane');
   const btn = document.getElementById('toc-btn');
   if (pane) pane.classList.toggle('hidden', !tocVisible);
