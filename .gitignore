@@ -14,6 +14,9 @@ knowledge.config.json
 # pi 本地状态
 .pi-glla/
 
+# 临时工作区（截图脚本、CDN 缓存等）
+.scratch/
+
 # OS
 .DS_Store
 Thumbs.db
