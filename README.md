@@ -37,6 +37,10 @@ C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新�
 
 ![课程视图](docs/img/courses.png)
 
+**📱 跨设备** — 服务常驻，平板 / 手机连同一 Wi-Fi 随时打开
+
+![跨设备示意](docs/img/devices.png)
+
 ## ✨ 核心特性
 
 ### 📱 跨设备随时看（主场景）
