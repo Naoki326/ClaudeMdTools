@@ -177,6 +177,10 @@ ClaudeMdTools/
 └── package.json
 ```
 
+## 链接
+
+- 💬 [LINUX DO](https://linux.do) — 开源社区，本项目在此分享交流
+
 ## License
 
 ISC
