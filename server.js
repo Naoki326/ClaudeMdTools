@@ -6,6 +6,7 @@ const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
 const marked = require('marked');
+const markedKatex = require('marked-katex-extension');
 const { resolveDataDir, initDataDir } = require('./lib/data-dir');
 const { resolveListen } = require('./lib/settings');
 
@@ -38,6 +39,13 @@ const kbRenderer = new marked.Renderer();
     return '<img src="' + href + '"' + (title ? ' title="' + title + '"' : '') + ' alt="' + (text || '') + '">';
   };
   marked.use({ renderer: r });
+}
+// 数学公式扩展（epic #7 D3）：`$...$` 行内 / `$$...$$` 块级 → KaTeX 静态 HTML。
+// 仅挂在本进程的服务端 marked 实例上——其唯一 parse 调用点就是渲染页
+// /api/knowledge/view，不影响 index.html 客户端 vendor marked（D4 客户端另有其道）。
+// throwOnError:false —— 坏公式降级为原样源码显示，不 throw 阻断整页渲染。
+{
+  marked.use(markedKatex({ throwOnError: false }));
 }
 
 const app = express();
@@ -740,6 +748,7 @@ app.get('/api/knowledge/view', (req, res) => {
 <title>${title}</title>
 <link rel="stylesheet" href="/vendor/github.min.css" id="hljs-light">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-dark" disabled>
+<link rel="stylesheet" href="/vendor/katex.min.css">
 <script src="/vendor/highlight.min.js"></script>
 <script src="/vendor/mermaid.min.js"></script>
 <script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
