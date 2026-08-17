@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "npx nodemon server.js",
-    "test": "node --test test/data-directory.test.js",
+    "test": "node --test \"test/*.test.js\"",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop claudemd",
     "pm2:restart": "pm2 restart claudemd",
@@ -27,7 +27,6 @@
   "dependencies": {
     "chokidar": "^5.0.0",
     "express": "^5.2.1",
-    "highlight.js": "^11.11.1",
     "marked": "^17.0.4",
     "ws": "^8.19.0"
   }
