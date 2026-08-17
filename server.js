@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
 const marked = require('marked');
 const { resolveDataDir, initDataDir } = require('./lib/data-dir');
+const { resolveListen } = require('./lib/settings');
 
 // marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染；
 // 同时重写图片相对路径 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
@@ -40,7 +41,6 @@ const kbRenderer = new marked.Renderer();
 }
 
 const app = express();
-const PORT = parseInt(process.env.PORT, 10) || 8080;
 
 // ============================================================
 // 数据目录（ADR-0001，术语见 CONTEXT.md）
@@ -53,6 +53,11 @@ const { migrated } = initDataDir(DATA_DIR, __dirname);
 for (const label of migrated) {
   console.log(`迁移: ${label} 已迁入数据目录（旧文件改名 *.migrated.bak 留底）`);
 }
+
+// 服务配置（ADR-0003 / CONTEXT.md「服务配置」）：数据目录 settings.json 的
+// port / host。生效优先级：PORT 环境变量 > settings > 内置默认 8080 / 0.0.0.0；
+// 改动重启后生效（PM2 等注入的 PORT env 依然优先生效）。
+const { port: PORT, host: HOST } = resolveListen(DATA_DIR);
 
 const DOCS_DIR = path.join(DATA_DIR, 'docs');
 const METADATA_FILE = path.join(DOCS_DIR, '.metadata.json');
@@ -1012,8 +1017,35 @@ function handleListenError(err) {
 server.on('error', handleListenError);
 wss.on('error', handleListenError);
 
-server.listen(PORT, () => {
-  console.log(`Markdown 查看器已启动: http://localhost:${PORT}`);
+// 局域网 IPv4 地址（排除回环 / 内部网卡）：横幅直接给出手机浏览器可输入的地址
+function lanIPv4Addresses() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
+// 启动横幅（ADR-0003 落地）：打印实际监听地址；非回环监听必须明示局域网读写风险
+function printStartupBanner(host, port) {
+  const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+  console.log(`Markdown 查看器已启动，监听 ${host}:${port}`);
+  const urls = loopback
+    ? [host === '::1' ? `http://[::1]:${port}` : `http://127.0.0.1:${port}`]
+    : [`http://localhost:${port}`, ...lanIPv4Addresses().map(ip => `http://${ip}:${port}`)];
+  for (const u of urls) console.log(`  访问地址: ${u}`);
+  if (loopback) {
+    console.log(`  host 已收敛到 ${host}，仅本机可访问`);
+  } else {
+    console.log(`  ⚠ 安全提示: 局域网内设备可读写所配置目录，请勿在不可信网络环境运行`);
+    console.log(`  （如需仅本机访问，可在数据目录 settings.json 中设置 host: 127.0.0.1）`);
+  }
+}
+
+server.listen(PORT, HOST, () => {
+  printStartupBanner(HOST, PORT);
   console.log(`数据目录: ${DATA_DIR}`);
 });
 

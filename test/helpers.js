@@ -70,13 +70,19 @@ function freePort() {
 
 // 启动真实服务进程，轮询 /api/knowledge/config 直到就绪
 // 返回 { baseUrl, port, stdout(), stderr(), fetch(), stop() }
-async function startServer({ t, installDir, env = {} }) {
-  const port = await freePort();
+// port 参数：省略 → 动态分配端口并以 PORT 环境变量注入（既有行为，抵御外部残留 PORT）；
+//           传数字 → 不携带 PORT 环境变量，服务端口由 settings.json / 内置默认决定，
+//           就绪轮询打在该端口上（settings 生效性由「能否在该端口应答」动态断言）
+async function startServer({ t, installDir, env = {}, port = null }) {
+  const injectPortEnv = port === null;
+  if (injectPortEnv) port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const finalEnv = { ...process.env, ...env };
+  if (injectPortEnv) finalEnv.PORT = String(port);
+  else delete finalEnv.PORT;
   const child = spawn(process.execPath, ['server.js'], {
     cwd: installDir,
-    // PORT 放在最后：测试传入的 env 可能携带外部环境残留的 PORT（如 PM2 遗留），必须以动态分配为准
-    env: { ...process.env, ...env, PORT: String(port) },
+    env: finalEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let out = '';
