@@ -6,6 +6,7 @@ const { createServer } = require('http');
 const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
 const marked = require('marked');
+const { resolveDataDir, initDataDir } = require('./lib/data-dir');
 
 // marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染；
 // 同时重写图片相对路径 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
@@ -40,9 +41,22 @@ const kbRenderer = new marked.Renderer();
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 8080;
-const DOCS_DIR = path.join(__dirname, 'docs');
+
+// ============================================================
+// 数据目录（ADR-0001，术语见 CONTEXT.md）
+// ============================================================
+// 服务全部可变状态（知识库配置 / 课程配置 / 对话元数据）存放在数据目录
+// ~/.lanbook/（LANBOOK_HOME 可覆盖）；安装目录只读，源码模式与安装模式
+// 读写同一数据目录。启动时先完成旧位置（安装目录）三文件迁移，再读写。
+const DATA_DIR = resolveDataDir();
+const { migrated } = initDataDir(DATA_DIR, __dirname);
+for (const label of migrated) {
+  console.log(`迁移: ${label} 已迁入数据目录（旧文件改名 *.migrated.bak 留底）`);
+}
+
+const DOCS_DIR = path.join(DATA_DIR, 'docs');
 const METADATA_FILE = path.join(DOCS_DIR, '.metadata.json');
-const TEACH_CONFIG_FILE = path.join(__dirname, 'teach.config.json');
+const TEACH_CONFIG_FILE = path.join(DATA_DIR, 'teach.config.json');
 
 // 从 sourcePath 推导可读标题
 // 例: C:\Work\maprefact\openspec\changes\refactor-map-matrix-polymorphism\design.md
@@ -100,12 +114,7 @@ function folderFromSourcePath(sourcePath) {
   return firstSeg || '本仓库';
 }
 
-// 启动时自动创建 docs 目录
-if (!fs.existsSync(DOCS_DIR)) {
-  fs.mkdirSync(DOCS_DIR, { recursive: true });
-}
-
-// 元数据读写
+// 元数据读写（数据目录 docs/.metadata.json，由 initDataDir 确保目录存在）
 function readMetadata() {
   try {
     if (fs.existsSync(METADATA_FILE)) {
@@ -455,7 +464,7 @@ app.use('/teach', (req, res, next) => {
 // 和课程视图对称：配置根目录 -> 递归扫描 .md -> 按项目分组展示
 // 文件保持原位读取/编辑，不复制进 docs/
 
-const KNOWLEDGE_CONFIG_FILE = path.join(__dirname, 'knowledge.config.json');
+const KNOWLEDGE_CONFIG_FILE = path.join(DATA_DIR, 'knowledge.config.json');
 
 // 内置默认排除的目录名（小写匹配）
 // 注意：'docs' 不在默认列表中 -- 大多数项目的 docs/ 里有有价值的文档。
@@ -468,7 +477,8 @@ const DEFAULT_EXCLUDED = [
   '.vscode', '.claude', '.husky', '.turbo', '.gradle',
 ];
 
-// 按绝对路径排除的目录（只针对本工具自身的 docs/，防止管理文档在知识库视图中重复）
+// 按绝对路径排除的目录（源码模式下本仓库的 docs/，防止管理文档在知识库视图中重复；
+// 与 1.1 行为保持一致）
 const LOCAL_EXCLUDE_DIRS = [path.join(__dirname, 'docs')];
 
 // 构建有效排除集合：内置默认 + 配置文件中的 excludeDirs + 可选的额外目录
@@ -1004,7 +1014,7 @@ wss.on('error', handleListenError);
 
 server.listen(PORT, () => {
   console.log(`Markdown 查看器已启动: http://localhost:${PORT}`);
-  console.log(`文档目录: ${DOCS_DIR}`);
+  console.log(`数据目录: ${DATA_DIR}`);
 });
 
 // 优雅关闭：收到信号时关闭所有监听器与连接，确保 TCP 端口及时释放

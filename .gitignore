@@ -6,6 +6,9 @@ logs/
 teach.config.json
 knowledge.config.json
 
+# 1.2.0 数据目录迁移：旧位置文件自动改名留底，不提交
+*.migrated.bak
+
 # Claude Code / IDE
 .claude/
 .vscode/
