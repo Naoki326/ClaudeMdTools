@@ -4,24 +4,29 @@
 
 两种运行身份（读写同一数据目录 `~/.lanbook/`）：
 
-- **npm 安装版（推荐）**——`npm i -g lanbook` 安装，PM2 直接托管 `lanbook` 命令
+- **安装模式（推荐）**——`npm i -g lanbook` 安装，PM2 托管包内 `server.js`
 - **源码模式（开发者）**——git 仓库内运行，使用仓库内 `ecosystem.config.cjs`（**源码模式专用**，npm 用户不需要）
 
-## npm 安装版常驻（推荐）
+## 安装模式常驻（推荐）
 
 老用户两行迁移换代（先删旧 `claudemd` 进程再启动）：
 
 ```bash
 pm2 delete claudemd   # 1.1 时代的旧进程名；没有可跳过
-pm2 start lanbook
+pm2 start "$(npm root -g)\lanbook\server.js" --name lanbook
 pm2 save
 ```
+
+> **Windows 注意**：不要写 `pm2 start lanbook`——PM2 会经 PATHEXT 解析到 npm 生成的
+> `lanbook.cmd` 批处理 shim，并把它当 node 脚本执行，直接 SyntaxError 崩溃循环
+> （pm2 7.x 实测：8 秒内重启 15 次转 errored）。让 PM2 直接托管包内的 `server.js`
+> 即可；`npm root -g` 输出全局包目录（Windows 默认 `%APPDATA%\npm\node_modules`）。
 
 | 项目 | 值 |
 |------|-----|
 | 进程名 | `lanbook` |
 | 端口 | `8080`（数据目录 `settings.json` 的 `port` 可改，重启生效；`PORT` 环境变量临时覆盖） |
-| 入口 | 全局 `lanbook` 命令 |
+| 入口 | `<全局包目录>\lanbook\server.js`（`npm root -g` 定位） |
 | 数据目录 | `~/.lanbook/`（配置升级不丢） |
 | 日志 | `pm2 logs lanbook` |
 
@@ -40,7 +45,7 @@ pm2 resurrect                 # 从 dump.pm2 恢复进程列表
 
 ## 源码模式（开发者，`ecosystem.config.cjs` 专用）
 
-> `ecosystem.config.cjs` 与 `scripts/` 下的开机自启脚本均为**源码模式专用**，保留在仓库内；npm 安装版直接用上节的 `pm2 start lanbook`。
+> `ecosystem.config.cjs` 与 `scripts/` 下的开机自启脚本均为**源码模式专用**，保留在仓库内；安装模式用上节的命令（PM2 托管全局安装目录内的 `server.js`）。
 
 ### 服务状态
 
@@ -96,7 +101,7 @@ pm2 save
 Unregister-ScheduledTask -TaskName 'lanbook-autostart' -Confirm:$false
 ```
 
-## 排错：开机后服务没起来
+### 排错：开机后服务没起来（源码模式）
 
 历史上出现过“自启后崩溃被放弃”的问题，根因链：
 
@@ -113,14 +118,14 @@ Unregister-ScheduledTask -TaskName 'lanbook-autostart' -Confirm:$false
 若仍遇到问题，排查步骤：
 
 ```bash
-pm2 logs lanbook --lines 50     # 看崩溃原因（npm 版同理）
+pm2 logs lanbook --lines 50     # 看崩溃原因（安装模式同理，进程同名）
 tail -20 logs/err.log           # 看是否 EADDRINUSE
 netstat -ano | grep 30142       # 看端口占用者
 # 若有脱管孤儿进程占着端口：
 powershell "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*ProcessContainerFork*' } | Select ProcessId,CommandLine"
 ```
 
-## 升级为原生 Windows 服务（可选，需管理员）
+### 升级为原生 Windows 服务（源码模式，可选，需管理员）
 
 如果希望「开机即起、无需登录、系统级服务」，以管理员身份操作：
 

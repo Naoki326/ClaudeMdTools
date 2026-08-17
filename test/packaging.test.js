@@ -47,13 +47,20 @@ function npmPack(dest) {
   return { tarball: path.join(dest, meta[0].filename), files };
 }
 
-// 经 npm 生成的命令 shim 运行全局安装的 lanbook（Windows 是 .cmd，需经 cmd /c）
-function runShim(shim, args, env, opts = {}) {
+// Windows 上 npm shim 是 .cmd 批处理，spawn 不能直接执行，需经 cmd /c；
+// 返回 [命令, 前缀参数]，供同步（runShim）/ 异步（启动冒烟）两种 spawn 复用
+function shimSpawnTarget(shim) {
   if (process.platform === 'win32') {
-    return spawnSync(process.env.comspec || 'cmd.exe', ['/c', shim, ...args],
-      { env, encoding: 'utf-8', timeout: 60000, windowsHide: true, ...opts });
+    return [process.env.comspec || 'cmd.exe', ['/c', shim]];
   }
-  return spawnSync(shim, args, { env, encoding: 'utf-8', timeout: 60000, ...opts });
+  return [shim, []];
+}
+
+// 经 npm 生成的命令 shim 运行全局安装的 lanbook
+function runShim(shim, args, env, opts = {}) {
+  const [cmd, prefix] = shimSpawnTarget(shim);
+  return spawnSync(cmd, [...prefix, ...args],
+    { env, encoding: 'utf-8', timeout: 60000, windowsHide: true, ...opts });
 }
 
 // 停止经 shim 启动的服务进程树（Windows 杀 cmd 不会连带 node，必须 /T）
@@ -142,10 +149,8 @@ test('干净目录 npm i -g <tarball>：lanbook 可启动、子命令可用、�
 
   // 启动（无参数）：横幅打印数据目录，HTTP 可访问
   const port = await freePort();
-  const child = spawn(
-    process.platform === 'win32'
-      ? (process.env.comspec || 'cmd.exe') : shim,
-    process.platform === 'win32' ? ['/c', shim] : [],
+  const [shimCmd, shimPrefix] = shimSpawnTarget(shim);
+  const child = spawn(shimCmd, shimPrefix,
     { env: { ...runEnv, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   t.after(() => killTree(child));
   let out = '';

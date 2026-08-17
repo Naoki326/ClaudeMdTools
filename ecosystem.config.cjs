@@ -1,4 +1,4 @@
-// PM2 进程配置 —— 源码模式专用（npm 安装版直接 `pm2 start lanbook`，无需本文件）
+// PM2 进程配置 —— 源码模式专用（安装模式无需本文件，用 `pm2 start "$(npm root -g)\lanbook\server.js" --name lanbook`，见 DEPLOY.md）
 // 详见 DEPLOY.md「源码模式」一节。
 module.exports = {
   apps: [

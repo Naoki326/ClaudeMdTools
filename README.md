@@ -115,7 +115,7 @@ npm install
 npm start
 ```
 
-源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；PM2 源码部署见 [DEPLOY.md](./DEPLOY.md)。
+源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；PM2 源码部署见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
 
 ## 🗂 数据目录
 
@@ -174,12 +174,14 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 
 ## 🔁 常驻运行（PM2）
 
-**npm 安装版（推荐）**——两条命令迁移换代：
+**安装模式（推荐）**——常驻只需两条命令：
 
 ```bash
-pm2 start lanbook
+pm2 start "$(npm root -g)\lanbook\server.js" --name lanbook
 pm2 save
 ```
+
+> Windows 下不要写 `pm2 start lanbook`：PM2 会把 npm 生成的 `.cmd` shim 当 node 脚本执行，直接崩溃循环；须像上面这样指向包内 `server.js`（详见 DEPLOY.md「安装模式常驻」）。
 
 **源码模式（开发者）**——仓库内 `ecosystem.config.cjs`（源码模式专用，进程名 `lanbook`）：
 
@@ -191,7 +193,7 @@ npm run pm2:logs     # 查看日志
 npm run pm2:save     # 保存进程快照（开机恢复用）
 ```
 
-详见 [DEPLOY.md](./DEPLOY.md)。
+详见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
 
 ## 📡 API 参考
 
