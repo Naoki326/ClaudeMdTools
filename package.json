@@ -3,6 +3,9 @@
   "version": "1.1.0",
   "description": "本地知识库 + 课程查看器：直接读取外部文件夹的 .md / HTML 课程，按项目分类，实时更新，在线编辑",
   "main": "server.js",
+  "bin": {
+    "lanbook": "bin/lanbook.js"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "npx nodemon server.js",

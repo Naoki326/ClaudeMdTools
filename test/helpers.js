@@ -26,6 +26,9 @@ function makeInstallDir(base) {
   if (fs.existsSync(path.join(REPO_ROOT, 'lib'))) {
     fs.cpSync(path.join(REPO_ROOT, 'lib'), path.join(installDir, 'lib'), { recursive: true });
   }
+  if (fs.existsSync(path.join(REPO_ROOT, 'bin'))) {
+    fs.cpSync(path.join(REPO_ROOT, 'bin'), path.join(installDir, 'bin'), { recursive: true });
+  }
   fs.cpSync(path.join(REPO_ROOT, 'public'), path.join(installDir, 'public'), { recursive: true });
   fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), path.join(installDir, 'node_modules'), 'junction');
   return installDir;
@@ -73,14 +76,15 @@ function freePort() {
 // port 参数：省略 → 动态分配端口并以 PORT 环境变量注入（既有行为，抵御外部残留 PORT）；
 //           传数字 → 不携带 PORT 环境变量，服务端口由 settings.json / 内置默认决定，
 //           就绪轮询打在该端口上（settings 生效性由「能否在该端口应答」动态断言）
-async function startServer({ t, installDir, env = {}, port = null }) {
+// entry 参数：服务入口脚本，缺省 'server.js'；传 'bin/lanbook.js' 即从 CLI 入口启动
+async function startServer({ t, installDir, env = {}, port = null, entry = 'server.js' }) {
   const injectPortEnv = port === null;
   if (injectPortEnv) port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const finalEnv = { ...process.env, ...env };
   if (injectPortEnv) finalEnv.PORT = String(port);
   else delete finalEnv.PORT;
-  const child = spawn(process.execPath, ['server.js'], {
+  const child = spawn(process.execPath, [entry], {
     cwd: installDir,
     env: finalEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
