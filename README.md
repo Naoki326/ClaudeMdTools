@@ -1,12 +1,12 @@
 <div align="center">
 
-# 📚 ClaudeMd Tools
+# 📚 lanbook
 
 **把散落在硬盘各处的 Markdown 笔记和 HTML 课程，装进局域网里任意一块屏幕。**
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.1.0-blue)
+![version](https://img.shields.io/badge/version-1.2.0-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -19,13 +19,15 @@
 
 你的笔记散落在几十个项目文件夹里：这个仓库一份 `SPEC.md`，那个 workspace 一堆 `/teach` 生成的课程。想集中翻阅？只能一个个开文件，或者复制到一处——然后副本开始过期。更别提想在沙发上用平板翻笔记：文件锁在台式机里。
 
-**ClaudeMd Tools 反着来**：文件一个都不动。你告诉它去哪些目录找，它起一个常驻 Web 服务负责扫描、分类、渲染。原文件改了，浏览器里下一秒就变；服务挂着，同一局域网的电脑、手机、平板打开就是同一份知识库。
+**lanbook 反着来**：文件一个都不动。你告诉它去哪些目录找，它起一个常驻 Web 服务负责扫描、分类、渲染。原文件改了，浏览器里下一秒就变；服务挂着，同一局域网的电脑、手机、平板打开就是同一份知识库。
 
 ```
 C:/Work/weldone/openspec/specs/...   ─┐
 C:/Work/AI/lessons/*.html            ─┼─►  局域网 Web 服务  ─►  电脑 / 手机 / 平板
 C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新）
 ```
+
+> lanbook 前身是 ClaudeMd Tools，1.2.0 起以 npm 包 `lanbook` 发布，旧配置首次启动自动迁移。
 
 ## 长这样
 
@@ -45,8 +47,9 @@ C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新�
 
 ### 📱 跨设备随时看（主场景）
 
-- 服务监听所有网卡，PM2 常驻后，**手机 / 平板连同一 Wi-Fi，浏览器打开 `http://<电脑IP>:8080` 就是完整知识库**——无需同步、无需 app
+- 服务监听所有网卡，常驻后，**手机 / 平板连同一 Wi-Fi，浏览器打开 `http://<电脑IP>:8080` 就是完整知识库**——无需同步、无需 app
 - 文件在电脑上改，手机上打开的页面实时刷新（chokidar 监听 + WebSocket 推送）
+- 前端三件套（marked / highlight.js / mermaid）随包本地分发，**断网 / CDN 不可达也照常渲染**
 
 ### 📚 知识库视图 — Markdown / HTML 文档
 
@@ -75,47 +78,110 @@ GET /kb/weldone/openspec/...md   # 直接拿到 markdown 原文
 
 ## 🚀 快速开始
 
+**npm 全局安装（推荐）**——两条命令开始阅读：
+
 ```bash
-npm install
-npm start
+npm i -g lanbook
+lanbook
 # 打开 http://localhost:8080
 ```
 
-首次启动是空的——点右上角 **⚙** 添加根目录（如 `C:/Work`），立即生效。
+不想安装？`npx lanbook` 先体验再决定。
 
-> 端口默认 8080，`PORT=8090 npm start` 可改；PM2 部署时改 `ecosystem.config.cjs` 的 `env.PORT`。
->
-> **手机 / 平板访问**：服务监听所有网卡，同一局域网设备浏览器打开 `http://<电脑局域网IP>:8080` 即可（电脑 IP 用 `ipconfig` 查）。配合 PM2 常驻，随时打开随时看。
+首次启动是空的——点右上角 **⚙** 添加根目录（如 `C:/Work`），立即生效。手机 / 平板连同一 Wi-Fi，浏览器打开 `http://<电脑局域网IP>:8080` 即可（电脑 IP 用 `ipconfig` 查）。
+
+### 命令行
+
+```bash
+lanbook                    # 启动服务（默认行为）
+lanbook open               # 服务未运行时后台启动，并打开浏览器
+lanbook add <目录>          # 添加知识库根目录
+lanbook add --teach <目录>  # 添加课程根目录
+lanbook config             # 打印数据目录与三个配置文件路径（设 $EDITOR 时打开）
+```
+
+### 端口与监听地址
+
+端口默认 8080。改端口 / 收敛监听地址：编辑数据目录下 `settings.json`（`lanbook config` 可定位），可选字段 `port` / `host`，重启生效；临时改端口也可用环境变量 `PORT=8090 lanbook`。
+
+### 开发者选项（源码模式）
+
+想改代码或从源码运行：
+
+```bash
+git clone http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools.git
+cd ClaudeMdTools
+npm install
+npm start
+```
+
+源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；PM2 源码部署见 [DEPLOY.md](./DEPLOY.md)。
+
+## 🗂 数据目录
+
+配置与元数据存放在用户主目录的**数据目录** `~/.lanbook/`（Windows 为 `%USERPROFILE%\.lanbook\`），不在安装目录——`npm update -g lanbook` 升级后配置原样保留：
+
+```
+~/.lanbook/
+├── settings.json          # 服务配置（port / host）
+├── knowledge.config.json  # 知识库根目录
+├── teach.config.json      # 课程根目录
+└── docs/                  # 对话元数据
+```
+
+- **源码模式与安装模式共用同一数据目录**——git 仓库内 `npm start` 与全局 `lanbook` 看到的是同一份配置
+- **自动迁移**：1.1 及以前的源码用户首次以 1.2.0 启动时，安装目录里的旧配置自动拷入数据目录，旧文件原地改名 `*.migrated.bak` 留底，可随时回退
+- 开发 / 测试隔离：环境变量 `LANBOOK_HOME` 可覆盖数据目录位置
+
+## 🔐 安全须知：局域网读写
+
+lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
+
+- 同一局域网内的**任何设备**都能打开页面——并且不止「读」：在线编辑会**直接写回**你配置的根目录里的文件，删改等同本机操作
+- 适用环境：可信的家庭 / 办公内网。**不要**在咖啡馆、机场、会议公共 Wi-Fi 等不可信网络中运行，也不要通过端口转发、内网穿透等方式暴露到公网
+- 每次启动横幅都会明示风险与全部局域网访问地址，请留意确认
+
+如需收敛到仅本机访问，编辑数据目录 `settings.json`（`lanbook config` 定位）：
+
+```jsonc
+{ "host": "127.0.0.1" }   // 重启生效；此后手机 / 平板将无法访问
+```
 
 ## ⚙️ 配置根目录
 
-两种方式，效果相同（配置写回文件、立即生效）：
+三种方式，效果相同（配置写回数据目录、立即生效）：
 
 **方式一：网页里点 ⚙** — 配置对话框实时预览每个根目录扫到多少文件，加错路径当场看到（✗ 不存在 / 0 个）。
 
-**方式二：编辑配置文件** — 克隆后从模板复制：
+**方式二：命令行** — `lanbook add C:/Work`（知识库）/ `lanbook add --teach C:/Work/AI`（课程）。
 
-```bash
-cp knowledge.config.example.json knowledge.config.json   # 知识库
-cp teach.config.example.json teach.config.json           # 课程
-```
+**方式三：直接编辑配置文件** — `lanbook config` 打印路径，按需编辑：
 
 ```jsonc
-// knowledge.config.json
+// ~/.lanbook/knowledge.config.json
 {
   "roots": ["C:/Work"],
   "excludeDirs": []   // 可选：额外排除的目录名，如 ["docs", "vendor"]
 }
 
-// teach.config.json
+// ~/.lanbook/teach.config.json
 { "roots": ["C:/Work/AI"] }
 ```
 
-> 配置文件含本地路径，已在 `.gitignore` 中忽略，不会误提交。
+> 仓库内的 `knowledge.config.example.json` / `teach.config.example.json` 是同内容的参考模板。
 
-**excludeDirs 说明**：目录名匹配（不区分大小写、不分层级），与内置排除列表（`node_modules`、`.git`、`dist` 等）合并生效。适合隐藏 `docs/`、`vendor/` 这类不想混入知识库的目录。注意它是全局的——对所有根目录生效；ClaudeMdTools 自身的 `docs/` 按绝对路径单独排除，不受影响。
+**excludeDirs 说明**：目录名匹配（不区分大小写、不分层级），与内置排除列表（`node_modules`、`.git`、`dist` 等）合并生效。适合隐藏 `docs/`、`vendor/` 这类不想混入知识库的目录。注意它是全局的——对所有根目录生效；lanbook 自身的 `docs/` 按绝对路径单独排除，不受影响。
 
 ## 🔁 常驻运行（PM2）
+
+**npm 安装版（推荐）**——两条命令迁移换代：
+
+```bash
+pm2 start lanbook
+pm2 save
+```
+
+**源码模式（开发者）**——仓库内 `ecosystem.config.cjs`（源码模式专用，进程名 `lanbook`）：
 
 ```bash
 npm run pm2:start    # 启动（崩溃自动重启）
@@ -161,18 +227,20 @@ npm run pm2:save     # 保存进程快照（开机恢复用）
 
 ## 🛠 技术栈
 
-**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · marked · highlight.js · mermaid.js　**部署** PM2
+**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · 本地 vendor（marked / highlight.js / mermaid 随包分发）　**部署** PM2
 
 ## 📁 项目结构
 
 ```
-ClaudeMdTools/
+lanbook/
+├── bin/lanbook.js                  # CLI 入口（open / add / config）
+├── lib/                            # 数据目录、服务配置
 ├── server.js                       # Express + WebSocket 服务端
-├── public/index.html               # 单页前端（知识库 / 课程 / 编辑 / 配置）
-├── docs/img/                       # README 截图
-├── ecosystem.config.cjs            # PM2 进程配置
-├── knowledge.config.example.json   # 知识库配置模板
-├── teach.config.example.json       # 课程配置模板
+├── public/                         # 单页前端 + vendor 静态资产
+├── test/                           # 进程边界测试
+├── knowledge.config.example.json   # 知识库配置参考模板
+├── teach.config.example.json       # 课程配置参考模板
+├── ecosystem.config.cjs            # PM2 配置（源码模式专用）
 ├── DEPLOY.md                       # 部署运维说明
 └── package.json
 ```

@@ -104,7 +104,7 @@ function resolveRoot(p) {
 // 从 sourcePath 推导文件所属的“文件夹”（项目名）
 // 规则：取 ../X/... 中的第一级目录名 X；没有 ../ 的归为“本仓库”
 // 例如 ../maprefact/openspec/specs/x.md -> maprefact
-//      ../ClaudeMdTools/notes/x.md   -> ClaudeMdTools
+//      ../lanbook/notes/x.md         -> lanbook
 //      README.md                      -> 本仓库
 function folderFromSourcePath(sourcePath) {
   if (!sourcePath) return null;
@@ -474,7 +474,7 @@ const KNOWLEDGE_CONFIG_FILE = path.join(DATA_DIR, 'knowledge.config.json');
 // 内置默认排除的目录名（小写匹配）
 // 注意：'docs' 不在默认列表中 -- 大多数项目的 docs/ 里有有价值的文档。
 // 如需排除特定目录，通过 knowledge.config.json 的 excludeDirs 配置。
-// ClaudeMdTools 自身的 docs/ 通过 LOCAL_EXCLUDE_DIRS 按绝对路径排除，避免误伤其他项目。
+// lanbook 自身的 docs/ 通过 LOCAL_EXCLUDE_DIRS 按绝对路径排除，避免误伤其他项目。
 const DEFAULT_EXCLUDED = [
   'node_modules', '.git', '.svn', 'bin', 'obj', 'dist', 'build',
   '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea',

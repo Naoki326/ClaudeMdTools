@@ -1,7 +1,9 @@
+// PM2 进程配置 —— 源码模式专用（npm 安装版直接 `pm2 start lanbook`，无需本文件）
+// 详见 DEPLOY.md「源码模式」一节。
 module.exports = {
   apps: [
     {
-      name: 'claudemd',
+      name: 'lanbook',
       script: 'server.js',
       cwd: __dirname,
       // 崩溃后自动重启

@@ -1,31 +1,46 @@
 {
-  "name": "claudemd-tools",
-  "version": "1.1.0",
+  "name": "lanbook",
+  "version": "1.2.0",
   "description": "本地知识库 + 课程查看器：直接读取外部文件夹的 .md / HTML 课程，按项目分类，实时更新，在线编辑",
   "main": "server.js",
   "bin": {
     "lanbook": "bin/lanbook.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "server.js",
+    "lib/",
+    "bin/",
+    "public/",
+    "knowledge.config.example.json",
+    "teach.config.example.json"
+  ],
   "scripts": {
     "start": "node server.js",
     "dev": "npx nodemon server.js",
     "test": "node --test \"test/*.test.js\"",
     "pm2:start": "pm2 start ecosystem.config.cjs",
-    "pm2:stop": "pm2 stop claudemd",
-    "pm2:restart": "pm2 restart claudemd",
-    "pm2:logs": "pm2 logs claudemd",
+    "pm2:stop": "pm2 stop lanbook",
+    "pm2:restart": "pm2 restart lanbook",
+    "pm2:logs": "pm2 logs lanbook",
     "pm2:save": "pm2 save"
   },
   "keywords": [
     "markdown",
     "knowledge-base",
-    "teaching",
+    "lanbook",
+    "local-network",
     "course-viewer",
-    "express",
-    "claude-code"
+    "express"
   ],
-  "author": "",
+  "author": "zzy <zhiyuan_zheng@roboticplus.com>",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools.git"
+  },
   "type": "commonjs",
   "dependencies": {
     "chokidar": "^5.0.0",

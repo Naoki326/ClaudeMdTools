@@ -1,8 +1,14 @@
-# 为 ClaudeMdTools (pm2 claudemd) 创建开机自启计划任务
+# 为 lanbook (pm2) 创建开机自启计划任务（源码模式专用；npm 安装版见 DEPLOY.md）
 # 原理：登录时执行 pm2 resurrect，从 dump.pm2 恢复进程列表
 $ErrorActionPreference = 'Stop'
 
-$taskName = 'ClaudeMdTools-AutoStart'
+$taskName = 'lanbook-autostart'
+
+# 清理 1.1 时代的旧任务名（ClaudeMdTools-AutoStart），避免遗留双自启
+if (Get-ScheduledTask -TaskName 'ClaudeMdTools-AutoStart' -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName 'ClaudeMdTools-AutoStart' -Confirm:$false
+    Write-Host "已删除旧任务：ClaudeMdTools-AutoStart"
+}
 
 # 定位 pm2 可执行文件（全局安装位置）
 $pm2Cmd = "C:\Users\Naoki\AppData\Roaming\npm\pm2.cmd"
@@ -45,7 +51,7 @@ Register-ScheduledTask `
     -Action $action `
     -Principal $principal `
     -Settings $settings `
-    -Description '开机登录后自动恢复 ClaudeMdTools (pm2 claudemd) 服务' | Out-Null
+    -Description '开机登录后自动恢复 lanbook (pm2) 服务' | Out-Null
 
 Write-Host "✓ 计划任务 '$taskName' 已创建" -ForegroundColor Green
 Write-Host ""
@@ -53,4 +59,4 @@ Write-Host "当前用户: $env:USERNAME"
 Write-Host "pm2 路径: $pm2Cmd"
 Write-Host "恢复命令: pm2 resurrect"
 Write-Host ""
-Write-Host "下次开机登录后，pm2 会自动从 dump.pm2 恢复 claudemd 进程。"
+Write-Host "下次开机登录后，pm2 会自动从 dump.pm2 恢复 lanbook 进程。"
