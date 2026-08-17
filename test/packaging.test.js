@@ -85,6 +85,8 @@ test('npm pack 产物只含白名单内容（服务端 / bin / 前端含 vendor 
     'bin/lanbook.js', 'lib/data-dir.js', 'lib/settings.js',
     'public/index.html', 'public/vendor/marked.min.js',
     'public/vendor/highlight.min.js', 'public/vendor/mermaid.min.js',
+    'public/vendor/katex.min.js', 'public/vendor/katex.min.css',
+    'public/vendor/fonts/KaTeX_Main-Regular.woff2',
     'knowledge.config.example.json', 'teach.config.example.json',
   ];
   for (const must of mustHave) {
