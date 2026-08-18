@@ -7,7 +7,10 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="/vendor/github.min.css" id="hljs-light">
 <link rel="stylesheet" href="/vendor/github-dark.min.css" id="hljs-dark" disabled>
+<link rel="stylesheet" href="/vendor/katex.min.css">
 <script src="/vendor/marked.min.js"></script>
+<script src="/vendor/katex.min.js"></script>
+<script src="/vendor/marked-katex-extension.umd.js"></script>
 <script src="/vendor/highlight.min.js"></script>
 <script src="/vendor/mermaid.min.js"></script>
 <style>
@@ -329,6 +332,13 @@ renderer.image = function(href, title, text) {
   return '<img src="' + href + '"' + (title ? ' title="' + title + '"' : '') + ' alt="' + (text || '') + '">';
 };
 marked.setOptions({ renderer, breaks: true, gfm: true });
+
+// 数学公式扩展（epic #7 D4）：与渲染页（T2 服务端）同款管线——$...$ 行内 /
+// $$...$$ 块级 → KaTeX 静态 HTML。知识库视图（loadFile）与编辑预览
+// （toggleEdit / updatePreview）共用本 marked 实例，一次接入两入口同时生效。
+// throwOnError:false —— 坏公式降级为原样源码显示，不 throw 阻断渲染；
+// 公式颜色继承页面 data-theme 正文色，主题切换无需重算公式节点。
+marked.use(markedKatex({ throwOnError: false }));
 
 // 主题切换
 function toggleTheme() {

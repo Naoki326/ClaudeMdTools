@@ -3,6 +3,8 @@
 // 覆盖验收标准：三件套本地资产 GET 200、页面源码零 cdnjs / 外部 CDN 引用
 // （首页 index.html + 知识库渲染页 /api/knowledge/view）。
 // Ticket #8（lanbook T1 · KaTeX vendor 资产进包）：新增 KaTeX JS / CSS / 字体资产断言。
+// Ticket #10（lanbook T3 · 客户端公式渲染）：新增 marked-katex-extension UMD 资产断言；
+// 首页与渲染页 katex 资产引用断言（渲染页仅需 css，服务端已静态渲染）。
 // 「断网手动冒烟」由用户执行；此处自动验证其前提：资产本地可达 + 页面不引外部资源。
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -47,7 +49,7 @@ test('vendor 三件套 + 明暗两套高亮样式本地资产 GET 200', async t 
   await srv.stop();
 });
 
-test('vendor KaTeX 资产（JS / CSS / 字体）本地 GET 200、非空壳', async t => {
+test('vendor KaTeX 资产（JS / CSS / UMD 扩展 / 字体）本地 GET 200、非空壳', async t => {
   const base = mkTempDir('lanbook-t8-katex-');
   const installDir = makeInstallDir(base);
   const dataDir = mkTempDir('lanbook-t8-katex-data-');
@@ -55,8 +57,9 @@ test('vendor KaTeX 资产（JS / CSS / 字体）本地 GET 200、非空壳', asy
 
   const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir } });
 
-  // 文本资产：与三件套同一断言模式（200 + 长度 > 1000 非空壳）
-  for (const p of ['/vendor/katex.min.js', '/vendor/katex.min.css']) {
+  // 文本资产：与三件套同一断言模式（200 + 长度 > 1000 非空壳）。
+  // marked-katex-extension UMD 构建约 2.7KB，含完整 tokenizer/renderer 扩展逻辑
+  for (const p of ['/vendor/katex.min.js', '/vendor/katex.min.css', '/vendor/marked-katex-extension.umd.js']) {
     const r = await srv.fetch(p);
     assert.equal(r.status, 200, `${p} 应 200`);
     const body = await r.text();
@@ -92,6 +95,10 @@ test('首页零 cdnjs / 外部 CDN 引用，改引本地 vendor 资产', async t
   }
   assert.ok(html.includes('/vendor/github.min.css'), '首页应引用明色高亮样式');
   assert.ok(html.includes('/vendor/github-dark.min.css'), '首页应引用暗色高亮样式');
+  // 客户端公式渲染（#10）：KaTeX JS/CSS + marked-katex-extension UMD 全部本地引用
+  for (const p of ['/vendor/katex.min.js', '/vendor/katex.min.css', '/vendor/marked-katex-extension.umd.js']) {
+    assert.ok(html.includes(p), `首页应引用本地 katex 资产 ${p}`);
+  }
   await srv.stop();
 });
 
@@ -127,5 +134,8 @@ test('知识库渲染页零 cdnjs / 外部 CDN 引用，改引本地 vendor 资�
   for (const p of ['/vendor/highlight.min.js', '/vendor/mermaid.min.js', '/vendor/github.min.css', '/vendor/github-dark.min.css']) {
     assert.ok(html.includes(p), `渲染页应引用本地资产 ${p}`);
   }
+  // 公式由服务端静态渲染（#9），客户端零额外 JS——渲染页仅需 KaTeX 样式与字体
+  assert.ok(html.includes('/vendor/katex.min.css'), '渲染页应引用本地 /vendor/katex.min.css');
+  assert.ok(!html.includes('/vendor/katex.min.js'), '渲染页公式已服务端渲染，不应再引 katex.min.js');
   await srv.stop();
 });

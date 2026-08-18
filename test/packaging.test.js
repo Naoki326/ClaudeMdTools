@@ -86,6 +86,7 @@ test('npm pack 产物只含白名单内容（服务端 / bin / 前端含 vendor 
     'public/index.html', 'public/vendor/marked.min.js',
     'public/vendor/highlight.min.js', 'public/vendor/mermaid.min.js',
     'public/vendor/katex.min.js', 'public/vendor/katex.min.css',
+    'public/vendor/marked-katex-extension.umd.js',
     'public/vendor/fonts/KaTeX_Main-Regular.woff2',
     'knowledge.config.example.json', 'teach.config.example.json',
   ];
