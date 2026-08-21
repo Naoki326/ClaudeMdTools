@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.2.0-blue)
+![version](https://img.shields.io/badge/version-1.3.0-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -98,6 +98,8 @@ lanbook open               # 服务未运行时后台启动，并打开浏览器
 lanbook add <目录>          # 添加知识库根目录
 lanbook add --teach <目录>  # 添加课程根目录
 lanbook config             # 打印数据目录与三个配置文件路径（设 $EDITOR 时打开）
+lanbook autostart          # 注册开机登录自启（--remove 卸载）
+lanbook stop               # 停止正在运行的服务
 ```
 
 ### 端口与监听地址
@@ -115,7 +117,7 @@ npm install
 npm start
 ```
 
-源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；PM2 源码部署见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
+源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；部署与常驻见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
 
 ## 🗂 数据目录
 
@@ -172,28 +174,25 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 
 **excludeDirs 说明**：目录名匹配（不区分大小写、不分层级），与内置排除列表（`node_modules`、`.git`、`dist` 等）合并生效。适合隐藏 `docs/`、`vendor/` 这类不想混入知识库的目录。注意它是全局的——对所有根目录生效；lanbook 自身的 `docs/` 按绝对路径单独排除，不受影响。
 
-## 🔁 常驻运行（PM2）
+## 🔁 常驻运行（开机自启）
 
-**安装模式（推荐）**——常驻只需两条命令：
-
-```bash
-pm2 start "$(npm root -g)\lanbook\server.js" --name lanbook
-pm2 save
-```
-
-> Windows 下不要写 `pm2 start lanbook`：PM2 会把 npm 生成的 `.cmd` shim 当 node 脚本执行，直接崩溃循环；须像上面这样指向包内 `server.js`（详见 DEPLOY.md「安装模式常驻」）。
-
-**源码模式（开发者）**——仓库内 `ecosystem.config.cjs`（源码模式专用，进程名 `lanbook`）：
+一条命令注册，之后每次登录自动后台启动服务——**不依赖 PM2 或任何外部守护进程**：
 
 ```bash
-npm run pm2:start    # 启动（崩溃自动重启）
-npm run pm2:stop     # 停止
-npm run pm2:restart  # 重启
-npm run pm2:logs     # 查看日志
-npm run pm2:save     # 保存进程快照（开机恢复用）
+lanbook autostart         # 注册登录自启（幂等，重复执行覆盖旧任务）
 ```
 
-详见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
+原理：注册 Windows 计划任务 `lanbook-autostart`（当前用户登录触发，无需管理员），经 VBS 包装隐藏窗口启动服务；stdout/stderr 追加到 `~/.lanbook/logs/service.log`。端口 / 监听地址由数据目录 `settings.json` 决定。
+
+配套命令：
+
+```bash
+lanbook stop              # 停止服务（按端口找进程，验证身份后才杀）
+lanbook autostart --remove   # 卸载自启
+schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路）
+```
+
+> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)。
 
 ## 📡 API 参考
 
@@ -229,20 +228,19 @@ npm run pm2:save     # 保存进程快照（开机恢复用）
 
 ## 🛠 技术栈
 
-**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · 本地 vendor（marked / highlight.js / mermaid 随包分发）　**部署** PM2
+**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · 本地 vendor（marked / highlight.js / mermaid 随包分发）　**常驻** 内置 autostart 命令 / nssm（可选）
 
 ## 📁 项目结构
 
 ```
 lanbook/
-├── bin/lanbook.js                  # CLI 入口（open / add / config）
+├── bin/lanbook.js                  # CLI 入口（open / add / config / autostart / stop）
 ├── lib/                            # 数据目录、服务配置
 ├── server.js                       # Express + WebSocket 服务端
 ├── public/                         # 单页前端 + vendor 静态资产
 ├── test/                           # 进程边界测试
 ├── knowledge.config.example.json   # 知识库配置参考模板
 ├── teach.config.example.json       # 课程配置参考模板
-├── ecosystem.config.cjs            # PM2 配置（源码模式专用）
 ├── DEPLOY.md                       # 部署运维说明
 └── package.json
 ```

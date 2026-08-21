@@ -258,3 +258,61 @@ test('lanbook open：服务已运行时不重复启动，直接打开浏览器',
   assert.ok(calls2.some(c => c.includes(`http://127.0.0.1:${srv.port}/`)), '浏览器应收到服务 URL');
   await srv.stop();
 });
+
+test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows）', { skip: process.platform !== 'win32' }, async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-autostart-');
+  const taskName = `lanbook-test-${Date.now().toString(36)}`;
+  const env = { LANBOOK_HOME: dataDir, LANBOOK_AUTOSTART_TASK: taskName };
+  t.after(() => {
+    // 兜底清理：测试中途断言失败也不在系统里留任务
+    try { spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true }); } catch {}
+  });
+
+  // 注册：exit 0 + 任务真实存在 + 包装脚本生成在数据目录
+  const r1 = await runCli({ installDir, args: ['autostart'], env });
+  assert.equal(r1.code, 0, `autostart 应成功\n--- stdout ---\n${r1.stdout}\n--- stderr ---\n${r1.stderr}`);
+  assert.ok(r1.stdout.includes(taskName), 'stdout 应包含任务名');
+  const q1 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf8', windowsHide: true });
+  assert.equal(q1.status, 0, `计划任务应已注册: ${q1.stderr}`);
+  assert.ok(fs.existsSync(path.join(dataDir, 'autostart.vbs')), '应生成 autostart.vbs 包装');
+  assert.ok(fs.existsSync(path.join(dataDir, 'autostart-task.cmd')), '应生成 autostart-task.cmd 包装');
+
+  // 卸载：exit 0 + 任务消失 + 包装脚本清理
+  const r2 = await runCli({ installDir, args: ['autostart', '--remove'], env });
+  assert.equal(r2.code, 0, `--remove 应成功\n--- stdout ---\n${r2.stdout}\n--- stderr ---\n${r2.stderr}`);
+  const q2 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf8', windowsHide: true });
+  assert.notEqual(q2.status, 0, '计划任务应已卸载');
+  assert.ok(!fs.existsSync(path.join(dataDir, 'autostart.vbs')), '卸载应删除 autostart.vbs');
+});
+
+test('lanbook stop：停止正在运行的服务并释放端口', async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-stop-');
+  const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir } });
+
+  const r = await runCli({
+    installDir,
+    args: ['stop'],
+    env: { LANBOOK_HOME: dataDir, PORT: String(srv.port) },
+  });
+  assert.equal(r.code, 0, `stop 应成功\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
+  assert.ok(r.stdout.includes('已停止'), 'stdout 应说明已停止');
+
+  // 端口不再应答（轮询给 taskkill 一点生效时间）
+  const deadline = Date.now() + 5000;
+  let down = false;
+  while (Date.now() < deadline) {
+    const alive = await fetch(`http://127.0.0.1:${srv.port}/`).then(() => true, () => false);
+    if (!alive) { down = true; break; }
+    await sleep(150);
+  }
+  assert.ok(down, '停止后端口不应再应答');
+});
+
+test('lanbook stop：服务未运行时友好提示、零副作用', async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-stop-idle-');
+  // 找一个大概率没人监听的端口写进 PORT
+  const free = 40000 + Math.floor(Math.random() * 10000);
+  const r = await runCli({ installDir, args: ['stop'], env: { LANBOOK_HOME: dataDir, PORT: String(free) } });
+  assert.equal(r.code, 0, `未运行时 stop 也应成功退出\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
+  assert.ok(r.stdout.includes('未在运行'), 'stdout 应说明服务未在运行');
+});

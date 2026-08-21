@@ -64,7 +64,7 @@ for (const label of migrated) {
 
 // 服务配置（ADR-0003 / CONTEXT.md「服务配置」）：数据目录 settings.json 的
 // port / host。生效优先级：PORT 环境变量 > settings > 内置默认 8080 / 0.0.0.0；
-// 改动重启后生效（PM2 等注入的 PORT env 依然优先生效）。
+// 改动重启后生效（环境变量注入的 PORT 依然优先生效）。
 const { port: PORT, host: HOST } = resolveListen(DATA_DIR);
 
 const DOCS_DIR = path.join(DATA_DIR, 'docs');
@@ -1017,8 +1017,9 @@ refreshKnowledgeWatcher();
 // 只给 server 注册 error handler 收不到，必须 wss 也注册，否则 Unhandled error 崩溃。
 function handleListenError(err) {
   if (err && err.code === 'EADDRINUSE') {
-    // 端口未释放（通常是 PM2 超内存重启的竞态）：退出码 1 让 PM2 按 restart_delay 重试
-    console.error(`端口 ${PORT} 被占用，PM2 将在 restart_delay 后重试...`);
+    // 端口未释放（常见于常驻管理器快速重启的竞态）：以非零码退出，
+    // 由外部守护负责重试；前台运行则直接看到报错
+    console.error(`端口 ${PORT} 被占用，请确认是否已有 lanbook 在运行（lanbook stop 可停止）`);
     process.exit(1);
   }
   throw err;
@@ -1059,7 +1060,7 @@ server.listen(PORT, HOST, () => {
 });
 
 // 优雅关闭：收到信号时关闭所有监听器与连接，确保 TCP 端口及时释放
-// 修复 PM2 超内存重启时旧进程端口未释放 → 新进程 EADDRINUSE → 连续崩溃被放弃的问题
+// （旧进程退净再退出，避免下次启动 EADDRINUSE）
 let shuttingDown = false;
 function gracefulShutdown(signal) {
   if (shuttingDown) return;

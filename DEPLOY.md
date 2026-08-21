@@ -1,147 +1,99 @@
-# 部署运行（PM2 服务化）
+# 部署运行
 
-本项目通过 [PM2](https://pm2.keymetrics.io/) 作为后台服务常驻运行，崩溃自动重启。
+lanbook 是常驻局域网的文档服务。1.3 起内置 `lanbook autostart` 一条命令注册登录自启，**不再依赖 PM2**。
 
 两种运行身份（读写同一数据目录 `~/.lanbook/`）：
 
-- **安装模式（推荐）**——`npm i -g lanbook` 安装，PM2 托管包内 `server.js`
-- **源码模式（开发者）**——git 仓库内运行，使用仓库内 `ecosystem.config.cjs`（**源码模式专用**，npm 用户不需要）
+- **安装模式（推荐）**——`npm i -g lanbook` 安装
+- **源码模式（开发者）**——git 仓库内运行
 
-## 安装模式常驻（推荐）
+两种身份的常驻方式完全相同（见下节），`autostart` 会指向各自身份的 `server.js`。
 
-老用户两行迁移换代（先删旧 `claudemd` 进程再启动）：
+## 常驻运行（登录自启）
 
 ```bash
-pm2 delete claudemd   # 1.1 时代的旧进程名；没有可跳过
-pm2 start "$(npm root -g)\lanbook\server.js" --name lanbook
-pm2 save
+lanbook autostart        # 注册登录自启（幂等，重复执行覆盖旧任务）
 ```
 
-> **Windows 注意**：不要写 `pm2 start lanbook`——PM2 会经 PATHEXT 解析到 npm 生成的
-> `lanbook.cmd` 批处理 shim，并把它当 node 脚本执行，直接 SyntaxError 崩溃循环
-> （pm2 7.x 实测：8 秒内重启 15 次转 errored）。让 PM2 直接托管包内的 `server.js`
-> 即可；`npm root -g` 输出全局包目录（Windows 默认 `%APPDATA%\npm\node_modules`）。
+原理链路：
+
+```
+Windows 计划任务 lanbook-autostart（当前用户登录触发，无需管理员）
+  → wscript  <数据目录>/autostart.vbs        （隐藏窗口，无黑框）
+    → cmd      <数据目录>/autostart-task.cmd （stdout/stderr 重定向）
+      → node   <包目录>/server.js             （日志追加到 <数据目录>/logs/service.log）
+```
 
 | 项目 | 值 |
 |------|-----|
-| 进程名 | `lanbook` |
-| 端口 | `8080`（数据目录 `settings.json` 的 `port` 可改，重启生效；`PORT` 环境变量临时覆盖） |
-| 入口 | `<全局包目录>\lanbook\server.js`（`npm root -g` 定位） |
-| 数据目录 | `~/.lanbook/`（配置升级不丢） |
-| 日志 | `pm2 logs lanbook` |
+| 任务名 | `lanbook-autostart` |
+| 触发 | 当前用户登录 |
+| 端口 / host | 数据目录 `settings.json`（自启场景没有 `PORT` 环境变量，settings 说了算） |
+| 日志 | `~/.lanbook/logs/service.log`（追加写，过大手动清理） |
+| 包装脚本 | `~/.lanbook/autostart.vbs` + `autostart-task.cmd`（注册时生成，`--remove` 时删除） |
 
-常用命令：
+配套命令：
 
 ```bash
-pm2 logs lanbook              # 实时日志（Ctrl+C 退出）
-pm2 logs lanbook --lines 100  # 最近 100 行
-pm2 restart lanbook
-pm2 stop lanbook
-pm2 save                      # 改动进程后重新保存快照
-pm2 resurrect                 # 从 dump.pm2 恢复进程列表
+lanbook stop                        # 停止服务（按端口找进程，CommandLine 验明是 node server.js 才杀）
+lanbook autostart --remove          # 卸载自启（同时删除包装脚本）
+schtasks /Run /TN lanbook-autostart # 手动立即启动一次（验证自启链路）
+schtasks /Query /TN lanbook-autostart  # 查看任务状态
 ```
 
-升级：`npm update -g lanbook && pm2 restart lanbook`（配置与元数据在数据目录，原样保留）。
+> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启（对个人知识库通常够用；服务崩溃后重新登录或 `schtasks /Run` 即可拉起）。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生服务，见下文。
 
-## 源码模式（开发者，`ecosystem.config.cjs` 专用）
-
-> `ecosystem.config.cjs` 与 `scripts/` 下的开机自启脚本均为**源码模式专用**，保留在仓库内；安装模式用上节的命令（PM2 托管全局安装目录内的 `server.js`）。
-
-### 服务状态
-
-| 项目 | 值 |
-|------|-----|
-| 进程名 | `lanbook` |
-| 端口 | `30142` |
-| 入口 | `server.js` |
-| 工作目录 | `C:\Work\ClaudeMdTools` |
-| 日志目录 | `C:\Work\ClaudeMdTools\logs\` |
-| PM2 配置 | `ecosystem.config.cjs` |
-| 进程快照 | `C:\Users\Naoki\.pm2\dump.pm2` |
-| 开机自启 | 登录计划任务 → `pm2 resurrect`（`scripts/setup-autostart.ps1`） |
-
-也可以用 `package.json` 里的脚本：`npm run pm2:start|stop|restart|logs|save`。
+## 从 PM2 迁移（1.2.x → 1.3）
 
 ```bash
-# 查看状态
-pm2 list
-pm2 logs lanbook              # 实时日志（Ctrl+C 退出）
-pm2 logs lanbook --lines 100  # 最近 100 行
-
-# 重启 / 停止 / 启动
-pm2 restart lanbook
-pm2 stop lanbook
-pm2 start ecosystem.config.cjs
-
-# 崩溃后若 dump 还在，手动恢复全部进程
-pm2 resurrect
+pm2 delete lanbook        # 停掉并移除 pm2 托管的旧进程；没有可跳过
+pm2 save                  # 快照里不再有 lanbook，resurrect 不会复活它
+lanbook autostart         # 注册登录自启
 ```
 
-### 自动运行机制
+- 1.2.x 时代的旧计划任务（登录执行 `pm2 resurrect`）与新任务同名 `lanbook-autostart`，注册时 `-Force` 直接覆盖，无需手工清理
+- 数据目录 `~/.lanbook/` 与 `settings.json` 端口配置原样保留，服务地址不变
 
-1. **进程管理（PM2）**：`server.js` 由 PM2 守护，崩溃自动重启（`autorestart: true`，内存超 1G 也会重启，重启间隔 5 秒避免端口竞态）。
-2. **开机/登录自启**：`scripts/setup-autostart.ps1` 创建登录计划任务，登录时执行 `pm2 resurrect`，从 `dump.pm2` 恢复进程列表（含 errored 进程也能拉起）。无控制台黑窗口。
+## 升级为原生 Windows 服务（可选，需管理员）
 
-> 因为当前是普通用户权限（非管理员），无法注册成「开机即起」的原生 Windows 服务（那需要管理员）。如需「开机即起、无需登录」，以管理员身份改用 `node-windows` 或 `nssm`，见下文「升级为原生 Windows 服务」。
-
-### 修改配置后重新保存快照
-
-每次用 `pm2 start/stop/delete` 改动了进程后，都要重新 save，否则开机自启恢复的是旧状态：
+「开机即起、无需登录、崩溃自动重启」用 [NSSM](https://nssm.cc/)：
 
 ```bash
-pm2 save
-```
-
-### 卸载（源码模式）
-
-```bash
-pm2 delete lanbook
-pm2 save
-# 删除登录自启计划任务
-Unregister-ScheduledTask -TaskName 'lanbook-autostart' -Confirm:$false
-```
-
-### 排错：开机后服务没起来（源码模式）
-
-历史上出现过“自启后崩溃被放弃”的问题，根因链：
-
-1. `server.js` 监听大型知识库目录（如 `RobimSrc` 29k+ 文件）占用较高内存 → 触发 `max_memory_restart` 重启
-2. PM2 超内存重启时旧进程端口未释放 → 新进程 `EADDRINUSE` 崩溃 → 连续重试 → 被判为 errored 放弃
-
-已做的加固（见 `server.js` / `ecosystem.config.cjs`）：
-
-- **`wss.on('error')` + `server.on('error')`**：端口冲突从 `WebSocketServer` 实例 emit，必须两者都注册，否则进程崩溃（已修复）
-- **优雅关闭**：收到 `SIGTERM`/`SIGINT` 时关闭所有 `chokidar` watcher、`WebSocketServer`、`http.Server` 再退出，确保端口及时释放
-- **`restart_delay: 5000`**：重启间隔 5 秒，给 TCP 端口留出释放时间
-- **`max_memory_restart: 1G`**：监听大目录内存开销高，放宽阈值
-
-若仍遇到问题，排查步骤：
-
-```bash
-pm2 logs lanbook --lines 50     # 看崩溃原因（安装模式同理，进程同名）
-tail -20 logs/err.log           # 看是否 EADDRINUSE
-netstat -ano | grep 30142       # 看端口占用者
-# 若有脱管孤儿进程占着端口：
-powershell "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*ProcessContainerFork*' } | Select ProcessId,CommandLine"
-```
-
-### 升级为原生 Windows 服务（源码模式，可选，需管理员）
-
-如果希望「开机即起、无需登录、系统级服务」，以管理员身份操作：
-
-```bash
-npm install -g node-windows
-# 然后用 node-windows 把服务注册成 Windows 服务
-# （服务名 lanbook，启动类型自动）
-```
-
-或用 [NSSM](https://nssm.cc/)：
-```bash
-nssm install lanbook "C:\Program Files\nodejs\node.exe" "C:\Work\ClaudeMdTools\server.js"
-nssm set lanbook AppDirectory C:\Work\ClaudeMdTools
-nssm set lanbook AppStdout C:\Work\ClaudeMdTools\logs\out.log
-nssm set lanbook AppStderr C:\Work\ClaudeMdTools\logs\err.log
+nssm install lanbook "C:\Program Files\nodejs\node.exe" "C:\path\to\lanbook\server.js"
+nssm set lanbook AppDirectory "C:\path\to\lanbook"
+nssm set lanbook AppStdout "C:\path\to\logs\out.log"
+nssm set lanbook AppStderr "C:\path\to\logs\err.log"
 nssm start lanbook
 ```
 
-注册成原生服务后，就可以移除上面的 PM2 方案。
+⚠️ nssm 默认用 LocalSystem 账户运行，`os.homedir()` 会指向 systemprofile，数据目录 `~/.lanbook` 会建到别处（roots 配置看起来「丢了」）。二选一：
+
+```bash
+nssm set lanbook ObjectName ".\你的用户名" "密码"
+# 或
+nssm set lanbook AppEnvironmentExtra LANBOOK_HOME=C:\Users\你的用户名\.lanbook
+```
+
+注册原生服务后记得 `lanbook autostart --remove`，避免登录自启与系统服务双开抢端口。
+
+## 排错
+
+**登录后服务没起来**：
+
+```bash
+schtasks /Query /TN lanbook-autostart /V /FO LIST   # 任务是否存在、上次结果
+tail -50 ~/.lanbook/logs/service.log                # 服务自己的输出（崩溃原因在这里）
+```
+
+**端口被占**：
+
+```bash
+lanbook stop                                        # 先试内置停止
+netstat -ano | findstr :8080                        # 看占用者 pid
+powershell "Get-CimInstance Win32_Process -Filter \"ProcessId=<pid>\" | Select CommandLine"
+```
+
+**历史加固仍在生效**（1.2 时代 PM2 快速重启竞态的教训，对任何常驻方式都有价值）：
+
+- 端口冲突同时挂在 `server.on('error')` 与 `wss.on('error')` 上（`WebSocketServer` 的冲突错误从 wss 实例 emit，漏注册会直接崩进程）
+- 收到 `SIGTERM`/`SIGINT` 优雅关闭：先关全部 chokidar watcher 与 WebSocket 连接再退出，端口及时释放
