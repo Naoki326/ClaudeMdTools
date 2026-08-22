@@ -33,15 +33,15 @@ C:/Work/notes/*.md                   ─┘    （原地读取 · 实时刷新�
 
 **📚 知识库视图** — 左侧目录树，右侧 Markdown 渲染 + 目录导航（TOC）
 
-![知识库视图](docs/img/knowledge.png)
+![知识库视图](https://raw.githubusercontent.com/Naoki326/ClaudeMdTools/master/docs/img/knowledge.png)
 
 **🎓 课程视图** — HTML 教学课程原样呈现
 
-![课程视图](docs/img/courses.png)
+![课程视图](https://raw.githubusercontent.com/Naoki326/ClaudeMdTools/master/docs/img/courses.png)
 
 **📱 跨设备** — 服务常驻，平板 / 手机连同一 Wi-Fi 随时打开
 
-![跨设备示意](docs/img/devices.png)
+![跨设备示意](https://raw.githubusercontent.com/Naoki326/ClaudeMdTools/master/docs/img/devices.png)
 
 ## ✨ 核心特性
 
@@ -111,13 +111,13 @@ lanbook stop               # 停止正在运行的服务
 想改代码或从源码运行：
 
 ```bash
-git clone http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools.git
+git clone https://github.com/Naoki326/ClaudeMdTools.git
 cd ClaudeMdTools
 npm install
 npm start
 ```
 
-源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；部署与常驻见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
+源码模式与安装模式读写同一数据目录 `~/.lanbook/`，两种身份一个真相；部署与常驻见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)（仓库文件，npm 包内不含）。
 
 ## 🗂 数据目录
 
@@ -192,7 +192,7 @@ lanbook autostart --remove   # 卸载自启
 schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路）
 ```
 
-> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools/-/blob/master/DEPLOY.md)。
+> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
 
 ## 📡 API 参考
 
@@ -247,6 +247,7 @@ lanbook/
 
 ## 链接
 
+- 🐙 [GitHub](https://github.com/Naoki326/ClaudeMdTools) — 仓库主页
 - 💬 [LINUX DO](https://linux.do) — 开源社区，本项目在此分享交流
 
 ## License

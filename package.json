@@ -34,7 +34,7 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+http://gitlab.roboticplus.com:2022/zzy/ClaudeMdTools.git"
+    "url": "git+https://github.com/Naoki326/ClaudeMdTools.git"
   },
   "type": "commonjs",
   "dependencies": {
