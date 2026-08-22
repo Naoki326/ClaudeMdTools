@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.3.0-blue)
+![version](https://img.shields.io/badge/version-1.3.1-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
