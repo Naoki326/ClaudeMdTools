@@ -490,7 +490,11 @@ const DEFAULT_EXCLUDED = [
   '.vscode', '.claude', '.husky', '.turbo', '.gradle',
   // pi / 其它 agent 工具目录：内含瞬态任务锁文件（.pi/tasks/*.lock），
   // 若不排除，chokidar 会监听它们并在 Windows 上触发 EPERM 崩溃
-  '.pi', '.pi-glla', '.zread', '.scratch',
+  '.pi', '.pi-glla', '.zread',
+  // 注意：.scratch 不在此列 —— 它是 agent 草稿区，常含需频繁查阅的文档
+  // （审查报告、spec 草稿、图表产物），知识库需收录；其中的瞬态文件
+  // （.log/.png/.lock 等）由 WATCHER_TRANSIENT_PATTERNS + knowledge
+  // watcher 的文档级剪枝（ignored 回调）双重兜底，不会进监听
 ];
 
 // 瞬态文件/目录名（watcher 专用）：锁文件、临时文件、Office 占用锁等。
@@ -1039,7 +1043,13 @@ function refreshKnowledgeWatcher() {
   if (!config.roots.length) return;
   const excluded = getExcludedSet();
   knowledgeWatcher = chokidar.watch(config.roots.map(r => resolveRoot(r)), {
-    ignored: (p) => isWatcherIgnored(p, excluded),
+    // 文档级剪枝：非知识文档（.log/.png/.lock 等瞬态产物，.scratch 草稿区尤多）
+    // 不进监听 —— 省事件风暴，也避免 awaitWriteFinish poll 独占文件触发 EPERM。
+    // stats 为 undefined（初始路径判断）时退回目录名黑名单，行为不弱于旧版。
+    ignored: (p, stats) => {
+      if (stats && stats.isFile() && !isKnowledgeDoc(p)) return true;
+      return isWatcherIgnored(p, excluded);
+    },
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
