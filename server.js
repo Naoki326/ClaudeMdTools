@@ -619,6 +619,12 @@ function scanKnowledgeFiles(dir, base, acc, excludedSet) {
   }
 }
 
+// 文档标题缓存：abs 路径 → { mtime, title }。/api/knowledge 每次请求都会
+// 全量 scanTree，逐文档 readFileSync 提取标题是主要耗时（千级文档 × 同步 IO，
+// Windows 上秒级）；mtime 未变的文档直接复用上次标题，重复请求的 IO 从
+// 「读全文」降到「仅 stat」。
+const titleCache = new Map();
+
 // 扫描目录构建树：只保留含知识库文档（.md/.html/.htm）的分支（空文件夹自动隐藏）
 // 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, kind, mtime }
 function scanTree(dir, base, excludedSet) {
@@ -637,17 +643,22 @@ function scanTree(dir, base, excludedSet) {
       const sub = scanTree(full, base, excludedSet);
       if (sub.length > 0) children.push({ type: 'dir', name: e.name, children: sub });
     } else if (e.isFile() && isKnowledgeDoc(e.name)) {
-      let title = null;
-      try {
-        const content = fs.readFileSync(full, 'utf-8');
-        if (isHtmlDoc(e.name)) {
-          title = titleFromHtml(content) || e.name.replace(/\.html?$/i, '');
-        } else {
-          title = titleFromMarkdown(content) || e.name.replace(/\.md$/i, '');
-        }
-      } catch { title = e.name.replace(/\.(md|html?)$/i, ''); }
+      // 先 stat 拿 mtime：命中缓存（mtime 未变）则跳过全文读取
       let mtime = 0;
       try { mtime = fs.statSync(full).mtimeMs; } catch {}
+      const cached = titleCache.get(full);
+      let title;
+      if (cached && cached.mtime === mtime) {
+        title = cached.title;
+      } else {
+        try {
+          const content = fs.readFileSync(full, 'utf-8');
+          title = isHtmlDoc(e.name)
+            ? (titleFromHtml(content) || e.name.replace(/\.html?$/i, ''))
+            : (titleFromMarkdown(content) || e.name.replace(/\.md$/i, ''));
+        } catch { title = e.name.replace(/\.(md|html?)$/i, ''); }
+        titleCache.set(full, { mtime, title });
+      }
       children.push({ type: 'file', name: e.name, title, kind: isHtmlDoc(e.name) ? 'html' : 'md', mtime });
     }
   }

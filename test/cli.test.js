@@ -203,6 +203,54 @@ test('lanbook config：打印三个配置文件路径；设 $EDITOR 时打开它
   assert.deepEqual(calls[0], [settings, knowledge, teach], '三个配置路径应作为参数传给 EDITOR');
 });
 
+test('lanbook --version / -v / version：输出版本号且与 package.json 一致', async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-version-');
+  const pkgVersion = readJson(path.join(installDir, 'package.json')).version;
+  for (const arg of ['--version', '-v', 'version']) {
+    const r = await runCli({ installDir, args: [arg], env: { LANBOOK_HOME: dataDir } });
+    assert.equal(r.code, 0, `lanbook ${arg} 应成功退出\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
+    assert.ok(r.stdout.trim().endsWith(pkgVersion), `输出应以版本号 ${pkgVersion} 结尾: ${r.stdout}`);
+  }
+});
+
+test('lanbook config <key> <value>：校验并写入 settings.json，保留其他字段', async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-config-set-');
+  const env = { LANBOOK_HOME: dataDir };
+  const settingsFile = path.join(dataDir, 'settings.json');
+
+  const r1 = await runCli({ installDir, args: ['config', 'port', '34567'], env });
+  assert.equal(r1.code, 0, `config port 应成功\n--- stdout ---\n${r1.stdout}\n--- stderr ---\n${r1.stderr}`);
+  assert.deepEqual(readJson(settingsFile), { port: 34567 }, '应写入 settings.json');
+
+  // 二次设置另一 key：已有字段保留
+  const r2 = await runCli({ installDir, args: ['config', 'host', '127.0.0.1'], env });
+  assert.equal(r2.code, 0, `config host 应成功\n--- stdout ---\n${r2.stdout}\n--- stderr ---\n${r2.stderr}`);
+  assert.deepEqual(readJson(settingsFile), { port: 34567, host: '127.0.0.1' }, '设置 host 应保留 port');
+
+  // 查询：显示生效值与来源
+  const r3 = await runCli({ installDir, args: ['config', 'port'], env });
+  assert.equal(r3.code, 0);
+  assert.ok(r3.stdout.includes('34567'), `config port 应显示生效值: ${r3.stdout}`);
+  assert.ok(r3.stdout.includes('settings.json'), `应标注来源: ${r3.stdout}`);
+
+  // 非法值 / 未知 key / 多余参数：非零退出且不写文件
+  const before = readJson(settingsFile);
+  for (const args of [['config', 'port', 'abc'], ['config', 'bogus'], ['config', 'port', '1', '2']]) {
+    const r = await runCli({ installDir, args, env });
+    assert.notEqual(r.code, 0, `lanbook ${args.join(' ')} 应非零退出`);
+  }
+  assert.deepEqual(readJson(settingsFile), before, '失败的操作不应改动 settings.json');
+});
+
+test('lanbook help：包含配置项说明、环境变量与示例', async t => {
+  const { installDir, dataDir } = setup(t, 'lanbook-cli-help-');
+  const r = await runCli({ installDir, args: ['help'], env: { LANBOOK_HOME: dataDir } });
+  assert.equal(r.code, 0, `help 应成功退出\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
+  for (const kw of ['服务配置项', '环境变量', 'LANBOOK_HOME', '示例', '127.0.0.1']) {
+    assert.ok(r.stdout.includes(kw), `help 输出应含「${kw}」`);
+  }
+});
+
 test('lanbook open：服务未运行时后台启动，端口可访问并拉起浏览器', async t => {
   const { base, installDir, dataDir } = setup(t, 'lanbook-cli-open-');
   const port = await freePort();

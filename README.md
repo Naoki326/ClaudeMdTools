@@ -98,13 +98,15 @@ lanbook open               # 服务未运行时后台启动，并打开浏览器
 lanbook add <目录>          # 添加知识库根目录
 lanbook add --teach <目录>  # 添加课程根目录
 lanbook config             # 打印数据目录与三个配置文件路径（设 $EDITOR 时打开）
+lanbook config port 8090   # 查看 / 设置服务配置（port、host），重启后生效
 lanbook autostart          # 注册开机登录自启（--remove 卸载）
 lanbook stop               # 停止正在运行的服务
+lanbook --version          # 显示版本号（lanbook help 查看完整帮助）
 ```
 
 ### 端口与监听地址
 
-端口默认 8080。改端口 / 收敛监听地址：编辑数据目录下 `settings.json`（`lanbook config` 可定位），可选字段 `port` / `host`，重启生效；临时改端口也可用环境变量 `PORT=8090 lanbook`。
+端口默认 8080。改端口：`lanbook config port 8090`；仅本机访问：`lanbook config host 127.0.0.1`（`lanbook config <key>` 可查看当前生效值与来源）。两者写入数据目录 `settings.json`，重启生效；临时改端口也可用环境变量 `PORT=8090 lanbook`。
 
 ### 开发者选项（源码模式）
 
@@ -143,7 +145,7 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 - 适用环境：可信的家庭 / 办公内网。**不要**在咖啡馆、机场、会议公共 Wi-Fi 等不可信网络中运行，也不要通过端口转发、内网穿透等方式暴露到公网
 - 每次启动横幅都会明示风险与全部局域网访问地址，请留意确认
 
-如需收敛到仅本机访问，编辑数据目录 `settings.json`（`lanbook config` 定位）：
+如需收敛到仅本机访问：`lanbook config host 127.0.0.1`（等价于编辑数据目录 `settings.json`）：
 
 ```jsonc
 { "host": "127.0.0.1" }   // 重启生效；此后手机 / 平板将无法访问

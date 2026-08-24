@@ -4,26 +4,54 @@
 //   lanbook                    启动服务（默认行为，与 node server.js 同进程）
 //   lanbook open               打开浏览器；服务未运行时先后台启动
 //   lanbook add [--teach] <dir>  添加根目录（默认知识库；--teach 进课程配置）
-//   lanbook config             打印三个配置文件路径；设 $EDITOR 时打开
+//   lanbook config [k] [v]   无参数打印配置路径；带参数查看/设置 port、host
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn, spawnSync } = require('node:child_process');
 const { resolveDataDir, initDataDir } = require('../lib/data-dir');
-const { resolveListen } = require('../lib/settings');
+const { SETTINGS_FILE_NAME, resolveListen, parsePort, parseHost } = require('../lib/settings');
 
-const USAGE = `用法: lanbook [命令]
+const USAGE = `用法: lanbook [命令] [参数]
 
-  (无命令)               启动服务（默认行为）
-  open                   打开浏览器访问服务；服务未运行时先后台启动
+  (无命令)                启动服务（默认行为）
+  open                    打开浏览器访问服务；服务未运行时先后台启动
   add [--teach] <目录>    添加根目录（默认知识库；--teach 添加课程根目录）
-  config                 打印三个配置文件路径（设 $EDITOR 时打开编辑）
-  autostart              注册开机登录自启（Windows）；--remove 卸载
-  stop                   停止正在运行的服务
-  help                   显示本帮助`;
+  config [key] [value]    无参数打印配置文件路径；带参数查看/设置 port、host
+  autostart [--remove]    注册开机登录自启（Windows）；--remove 卸载
+  stop                    停止正在运行的服务
+  version                 显示版本号
+  help                    显示详细帮助`;
+
+const HELP = `${USAGE}
+
+服务配置项（config <key> [value]，写入数据目录 settings.json，服务重启后生效）:
+  port     监听端口，1–65535 整数（默认 8080）
+  host     监听地址（默认 0.0.0.0；仅本机访问设为 127.0.0.1）
+
+环境变量:
+  PORT                    一次性覆盖端口（优先级高于 settings.json）
+  EDITOR                  lanbook config 打开的编辑器（如 "code -w"）
+  BROWSER                 lanbook open 打开的浏览器（设为 none 则不打开）
+  LANBOOK_HOME            数据目录位置（默认 ~/.lanbook）
+  LANBOOK_AUTOSTART_TASK  自启计划任务名（默认 lanbook-autostart）
+
+示例:
+  lanbook config port 30142        改监听端口
+  lanbook config host 127.0.0.1    仅本机可访问
+  lanbook config port              查看端口当前生效值与来源
+  lanbook add D:\\Docs             添加知识库根目录
+  lanbook add --teach ~/courses    添加课程根目录
+  lanbook stop && lanbook open     重启服务应用新配置
+
+文档: https://github.com/Naoki326/ClaudeMdTools`;
 
 function printUsage(stream) {
   stream.write(USAGE + '\n');
+}
+
+function printHelp() {
+  process.stdout.write(HELP + '\n');
 }
 
 function fail(msg) {
@@ -84,10 +112,63 @@ function splitShellCommand(value) {
   return parts;
 }
 
-// lanbook config：打印全部三个配置文件路径（服务配置 / 知识库 / 课程）；
-// 设 $EDITOR 时依次打开（port/host 等服务级配置走此入口编辑，网页 ⚙ 不暴露）。
-function cmdConfig() {
+// 可设置的服务配置项（settings.json）：key → 校验解析 + 无效值报错文案。
+// 校验与服务端同源（lib/settings.js），CLI 接受的值服务端一定能识别。
+const CONFIG_KEYS = {
+  port: { parse: parsePort, invalid: v => `无效的端口: ${v}（需 1–65535 的整数）` },
+  host: { parse: parseHost, invalid: v => `无效的 host: ${v}（需非空字符串，如 127.0.0.1）` },
+};
+
+// lanbook config [key] [value]：
+//   无参数        打印三个配置文件路径（服务配置 / 知识库 / 课程）；设 $EDITOR 时依次打开
+//   <key>         查看该配置项当前生效值与来源（PORT 环境变量 > settings.json > 默认）
+//   <key> <value> 校验后写入 settings.json（保留其他字段；服务重启后生效）
+async function cmdConfig(args) {
   const dataDir = resolveDataDir();
+
+  if (args.length > 0) {
+    if (args.length > 2) fail(`多余的参数: ${args.slice(2).join(' ')}\n\n${USAGE}`);
+    const [key, value] = args;
+    const spec = CONFIG_KEYS[key];
+    if (!spec) fail(`未知的配置项: ${key}（可用: ${Object.keys(CONFIG_KEYS).join(', ')}）`);
+
+    initDataDir(dataDir, path.join(__dirname, '..'));
+    const settingsFile = path.join(dataDir, SETTINGS_FILE_NAME);
+    let stored;
+    try { stored = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch { stored = {}; }
+
+    // 查询：生效值 + 来源标注（优先级与 resolveListen 一致）
+    if (args.length === 1) {
+      const effective = resolveListen(dataDir);
+      if (key === 'port') {
+        const source = parsePort(process.env.PORT) != null ? '环境变量 PORT'
+          : parsePort(stored.port) != null ? 'settings.json' : '内置默认';
+        console.log(`port = ${effective.port}（来源: ${source}）`);
+      } else {
+        const source = parseHost(stored.host) != null ? 'settings.json' : '内置默认';
+        console.log(`host = ${effective.host}（来源: ${source}）`);
+      }
+      return;
+    }
+
+    // 写入：先记写入前的生效端口（运行中服务用的端口），写完后探测给重启提示
+    const before = resolveListen(dataDir);
+    const parsed = spec.parse(value);
+    if (parsed == null) fail(spec.invalid(value));
+    stored[key] = parsed;
+    fs.writeFileSync(settingsFile, JSON.stringify(stored, null, 2) + '\n', 'utf-8');
+    console.log(`已设置 ${key} = ${parsed}`);
+    console.log(`配置文件: ${settingsFile}`);
+    if (await isUp(`http://127.0.0.1:${before.port}/`)) {
+      console.log(`注意: 服务正在运行（端口 ${before.port}），新配置重启后生效: lanbook stop && lanbook open`);
+    } else {
+      console.log('服务未在运行，下次启动时新配置生效');
+    }
+    return;
+  }
+
+  // 无参数：打印三个配置文件路径；设 $EDITOR 时依次打开
+  // （settings.json 之外的知识库 / 课程配置仍走编辑器；roots 推荐 lanbook add）
   const settings = path.join(dataDir, 'settings.json');
   const knowledge = path.join(dataDir, 'knowledge.config.json');
   const teach = path.join(dataDir, 'teach.config.json');
@@ -373,7 +454,7 @@ switch (cmd) {
     cmdAdd(args);
     break;
   case 'config':
-    cmdConfig();
+    cmdConfig(args).catch(err => fail(err.stack || String(err)));
     break;
   case 'autostart':
     cmdAutostart(args);
@@ -381,10 +462,15 @@ switch (cmd) {
   case 'stop':
     cmdStop();
     break;
+  case 'version':
+  case '--version':
+  case '-v':
+    console.log(require('../package.json').version);
+    break;
   case 'help':
   case '--help':
   case '-h':
-    printUsage(process.stdout);
+    printHelp();
     break;
   default:
     console.error(`未知命令: ${cmd}\n`);

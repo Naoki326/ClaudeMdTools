@@ -443,11 +443,11 @@ function renderKbRoot(r) {
   const fileCount = countFiles(r.children);
   return `<div class="tree-item tree-root">
     <div class="tree-row tree-root-row" onclick="toggleFolderCollapse('${escapeAttr(r.path)}')" title="${escapeHtml(r.path)}">
-      <span class="root-toggle ${isCollapsed ? 'collapsed' : ''}">▼</span>
+      <span class="root-toggle ${isCollapsed ? 'collapsed' : ''}" data-folder-toggle="${escapeAttr(r.path)}">▼</span>
       <span class="tree-label">📚 ${escapeHtml(r.name)}</span>
       <span class="tree-count">${fileCount}</span>
     </div>
-    <div class="tree-children ${isCollapsed ? 'collapsed' : ''}">
+    <div class="tree-children ${isCollapsed ? 'collapsed' : ''}" data-folder-children="${escapeAttr(r.path)}">
       ${renderKbChildren(r.children, r.path, '', 1)}
     </div>
   </div>`;
@@ -468,7 +468,7 @@ function renderKbChildren(children, rootPath, parentPath, depth) {
           <span class="tree-label">📁 ${escapeHtml(n.name)}</span>
           <span class="tree-count">${fileCount}</span>
         </div>
-        <div class="tree-children ${isCollapsed ? 'collapsed' : ''}">
+        <div class="tree-children ${isCollapsed ? 'collapsed' : ''}" data-folder-children="${escapeAttr(key)}">
           ${renderKbChildren(n.children, rootPath, nodePath, depth + 1)}
         </div>
       </div>`;
@@ -521,11 +521,29 @@ function expandToCurrentFile(fileKey) {
   persistExpandedFolders();
 }
 
+// 属性选择器构造：folder key 是绝对路径，含 : \ . 等对属性选择器值不安全的字符，
+// 用 CSS.escape 转义（不支持时退回原值，仅影响极老浏览器）
+function folderAttrSelector(attr, folder) {
+  const v = (window.CSS && CSS.escape) ? CSS.escape(folder) : folder;
+  return `[${attr}="${v}"]`;
+}
+
 function toggleFolderCollapse(folder) {
   if (expandedFolders.has(folder)) expandedFolders.delete(folder);
   else expandedFolders.add(folder);
   persistExpandedFolders();
-  loadFileList();
+  // 纯 UI 翻转：树数据未变，不重新请求 /api/knowledge（服务端全量扫描秒级耗时，
+  // 每次折叠/展开都拉全量列表是侧边栏卡顿的主因）。直接翻 children 容器与
+  // 折叠箭头的 class，点击即时生效；DOM 不在（异常状态）时兜底全量刷新。
+  const children = document.querySelector(folderAttrSelector('data-folder-children', folder));
+  if (children) {
+    const collapsed = !expandedFolders.has(folder);
+    children.classList.toggle('collapsed', collapsed);
+    document.querySelectorAll(folderAttrSelector('data-folder-toggle', folder))
+      .forEach(el => el.classList.toggle('collapsed', collapsed));
+  } else {
+    loadFileList();
+  }
 }
 
 // 会话分组折叠状态
