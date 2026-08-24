@@ -176,23 +176,23 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 
 ## 🔁 常驻运行（开机自启）
 
-一条命令注册，之后每次登录自动后台启动服务——**不依赖 PM2 或任何外部守护进程**：
+一条命令注册，之后每次登录 / 解锁工作站自动后台启动服务，进程崩溃后 3 秒自动重启——**不依赖 PM2 或任何外部守护进程**：
 
 ```bash
-lanbook autostart         # 注册登录自启（幂等，重复执行覆盖旧任务）
+lanbook autostart         # 注册自启（登录 + 解锁触发，崩溃自动重启，幂等覆盖旧任务）
 ```
 
-原理：注册 Windows 计划任务 `lanbook-autostart`（当前用户登录触发，无需管理员），经 VBS 包装隐藏窗口启动服务；stdout/stderr 追加到 `~/.lanbook/logs/service.log`。端口 / 监听地址由数据目录 `settings.json` 决定。
+原理：注册 Windows 计划任务 `lanbook-autostart`（当前用户登录 + 工作站解锁双触发，无需管理员），经 VBS 包装隐藏窗口启动服务；包装脚本是带 `:loop` 的守护循环——服务进程异常退出后 3 秒自动拉起，`lanbook stop` 写入停止标记让守护循环退出（服务不会复活）。stdout/stderr 追加到 `~/.lanbook/logs/service.log`。端口 / 监听地址由数据目录 `settings.json` 决定。
 
 配套命令：
 
 ```bash
-lanbook stop              # 停止服务（按端口找进程，验证身份后才杀）
+lanbook stop              # 停止服务（写停止标记 + 按端口找进程，验证身份后才杀）
 lanbook autostart --remove   # 卸载自启
 schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路）
 ```
 
-> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
+> 崩溃自动重启由自带的守护循环提供。若需要「开机即起（无需登录）」或系统级服务，用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
 
 ## 📡 API 参考
 

@@ -488,6 +488,20 @@ const DEFAULT_EXCLUDED = [
   '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea',
   'target', 'out', 'logs', '.cache', '.vs', 'packages',
   '.vscode', '.claude', '.husky', '.turbo', '.gradle',
+  // pi / 其它 agent 工具目录：内含瞬态任务锁文件（.pi/tasks/*.lock），
+  // 若不排除，chokidar 会监听它们并在 Windows 上触发 EPERM 崩溃
+  '.pi', '.pi-glla', '.zread', '.scratch',
+];
+
+// 瞬态文件/目录名（watcher 专用）：锁文件、临时文件、Office 占用锁等。
+// 这些文件被其它进程占用/删除时，Windows 上访问会 EPERM，必须从监听中排除。
+// 注意：这些不加入 DEFAULT_EXCLUDED，避免影响扫描（扫描只看文档扩展名，天然忽略）。
+const WATCHER_TRANSIENT_PATTERNS = [
+  /\.lock$/i,        // 锁文件（pi tasks、git index.lock 等）
+  /\.tmp$/i,         // 临时文件
+  /~\$.*$/i,         // Office 占用锁（~$xxx.docx）
+  /^\.#.*$/i,       // Emacs 自动保存锁
+  /\/\.[^\/]+?\.sw[p-x]$/i, // Vim swap
 ];
 
 // 按绝对路径排除的目录（源码模式下本仓库的 docs/，防止管理文档在知识库视图中重复；
@@ -953,11 +967,43 @@ function broadcast(data) {
   });
 }
 
+// —— watcher 统一健壮性 ——
+// 1) ignored 规则：目录名黑名单（与扫描一致）+ 瞬态文件模式（锁/临时/Office）
+//    保证 chokidar 不监听 .pi/tasks/*.lock 这类会产生 EPERM 的路径
+// 2) error 兜底：Windows 上文件被占用/删除时 chokidar 可能 emit error，
+//    不处理会 Unhandled error 直接崩溃——记录日志，不终止服务
+function isWatcherIgnored(p, excludedSet) {
+  if (typeof p !== 'string' || !p) return false;
+  // 路径段级匹配：检查每一段是否命中目录名黑名单（node_modules/.git/.pi 等）。
+  // chokidar 回调收到的是完整路径（如 root/node_modules/x/y.js），
+  // 只匹配 basename 会漏掉嵌套目录（原 bug），必须逐段检查。
+  const segments = p.split(/[\\/]+/).filter(Boolean);
+  for (const seg of segments) {
+    const name = seg.toLowerCase();
+    if (DEFAULT_EXCLUDED.includes(name)) return true;
+    if (excludedSet && excludedSet.has(name)) return true;
+  }
+  // 瞬态文件模式（锁文件、临时文件、Office 锁）——匹配完整路径
+  if (WATCHER_TRANSIENT_PATTERNS.some(re => re.test(p))) return true;
+  // 绝对路径黑名单
+  const norm = path.resolve(p);
+  return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
+}
+
+function onWatcherError(label, err) {
+  // EPERM/ENOENT 等瞬时文件错误：记录并继续，不让单文件问题打死整个服务
+  console.error(`[watcher:${label}] 监听错误（已忽略，服务继续运行）:`, err?.code || err?.message || err);
+}
+
 // 使用 chokidar 监听 docs 目录变化
 const watcher = chokidar.watch(DOCS_DIR, {
   ignoreInitial: true,
+  // docs 目录也要排除瞬态文件
+  ignored: (p) => isWatcherIgnored(p, null),
   awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
 });
+
+watcher.on('error', (err) => onWatcherError('docs', err));
 
 watcher.on('all', (event, filePath) => {
   if (!filePath.endsWith('.md')) return;
@@ -973,13 +1019,11 @@ function refreshTeachWatcher() {
   if (workspaces.length === 0) return;
   teachWatcher = chokidar.watch(workspaces.map(ws => ws.path), {
     ignoreInitial: true,
-    // 排除构建/依赖目录，避免在大仓库上建立海量监听 handle
-    ignored: (p) => {
-      if (typeof p !== 'string' || !p) return false;
-      return DEFAULT_EXCLUDED.includes(path.basename(p).toLowerCase());
-    },
+    // 排除构建/依赖目录与瞬态文件，避免海量监听 handle 和 EPERM
+    ignored: (p) => isWatcherIgnored(p, null),
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
+  teachWatcher.on('error', (err) => onWatcherError('teach', err));
   teachWatcher.on('all', (event, filePath) => {
     if (!/\.html$|\.css$|\.js$/.test(filePath)) return;
     broadcast({ type: 'course-change', event });
@@ -995,16 +1039,11 @@ function refreshKnowledgeWatcher() {
   if (!config.roots.length) return;
   const excluded = getExcludedSet();
   knowledgeWatcher = chokidar.watch(config.roots.map(r => resolveRoot(r)), {
-    ignored: (p) => {
-      if (typeof p !== 'string' || !p) return false;
-      const name = path.basename(p).toLowerCase();
-      if (excluded.has(name)) return true;
-      const norm = path.resolve(p);
-      return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
-    },
+    ignored: (p) => isWatcherIgnored(p, excluded),
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
+  knowledgeWatcher.on('error', (err) => onWatcherError('knowledge', err));
   knowledgeWatcher.on('all', (event, filePath) => {
     if (!isKnowledgeDoc(filePath)) return;
     broadcast({ type: 'knowledge-change', event });

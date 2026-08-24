@@ -23,3 +23,6 @@ knowledge.config.json
 # OS
 .DS_Store
 Thumbs.db
+# pi 本地状态
+.pi-glla/
+.pi/

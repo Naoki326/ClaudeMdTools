@@ -277,6 +277,23 @@ test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows�
   assert.ok(fs.existsSync(path.join(dataDir, 'autostart.vbs')), '应生成 autostart.vbs 包装');
   assert.ok(fs.existsSync(path.join(dataDir, 'autostart-task.cmd')), '应生成 autostart-task.cmd 包装');
 
+  // 守护循环：autostart-task.cmd 应包含崩溃重启循环 + 停止标记检测
+  const cmdContent = fs.readFileSync(path.join(dataDir, 'autostart-task.cmd'), 'utf8');
+  assert.ok(cmdContent.includes(':loop'), '守护脚本应含 :loop 崩溃重启循环');
+  assert.ok(cmdContent.includes('.service-stopped'), '守护脚本应检测停止标记');
+  assert.ok(cmdContent.includes('timeout /t 3'), '守护脚本崩溃后应等待 3 秒重启');
+
+  // 解锁触发器：任务 XML 应含 SessionStateChangeTrigger/SessionUnlock
+  const qXml = spawnSync('schtasks', ['/Query', '/TN', taskName, '/XML'], { encoding: 'utf8', windowsHide: true });
+  assert.ok(qXml.stdout.includes('SessionStateChangeTrigger'), '应注册工作站解锁触发器');
+  assert.ok(qXml.stdout.includes('SessionUnlock'), '解锁触发器应为 SessionUnlock');
+
+  // 重新注册应清除停止标记（若有）
+  fs.writeFileSync(path.join(dataDir, '.service-stopped'), 'test', 'utf8');
+  const r1b = await runCli({ installDir, args: ['autostart'], env });
+  assert.equal(r1b.code, 0, `重复 autostart 应成功\n${r1b.stderr}`);
+  assert.ok(!fs.existsSync(path.join(dataDir, '.service-stopped')), '重新注册应清除停止标记');
+
   // 卸载：exit 0 + 任务消失 + 包装脚本清理
   const r2 = await runCli({ installDir, args: ['autostart', '--remove'], env });
   assert.equal(r2.code, 0, `--remove 应成功\n--- stdout ---\n${r2.stdout}\n--- stderr ---\n${r2.stderr}`);
@@ -296,6 +313,7 @@ test('lanbook stop：停止正在运行的服务并释放端口', async t => {
   });
   assert.equal(r.code, 0, `stop 应成功\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
   assert.ok(r.stdout.includes('已停止'), 'stdout 应说明已停止');
+  assert.ok(fs.existsSync(path.join(dataDir, '.service-stopped')), 'stop 应写入停止标记（防守护循环复活）');
 
   // 端口不再应答（轮询给 taskkill 一点生效时间）
   const deadline = Date.now() + 5000;
