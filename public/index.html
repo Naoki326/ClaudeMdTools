@@ -92,10 +92,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .toc-list { list-style: none; margin: 0; padding: 0; }
 .toc-list .toc-list { padding-left: 12px; }
 .toc-item { margin: 1px 0; }
-.toc-item a { display: block; padding: 3px 8px; border-radius: 4px; color: var(--text-secondary); font-size: 13px; line-height: 1.4; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-item a { display: block; padding: 3px 8px; border-radius: 4px; color: var(--text-secondary); font-size: 13px; line-height: 1.4; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; container-type: inline-size; }
+/* 选中项滚动显示全文：文字包 span，溢出时 alternate 往返平移（cqw 相对条目宽度，不溢出时位移为 0） */
+.toc-item a span { display: inline-block; }
+.toc-item.active > a { text-overflow: clip; }
+.toc-item.active > a span { animation: toc-marquee 9s ease-in-out infinite alternate; }
+@keyframes toc-marquee { from { transform: translateX(0); } to { transform: translateX(min(0px, calc(100cqw - 100%))); } }
 .toc-item a:hover { color: var(--text); background: var(--bg-tertiary); }
 .toc-item.active > a { color: var(--accent); font-weight: 600; background: var(--bg-tertiary); }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin-top: 24px; margin-bottom: 16px; font-weight: 600; line-height: 1.25; }
+/* 标题单行：超宽折叠为省略号，行内可横向滑动查看全文（隐藏滚动条） */
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { white-space: nowrap; overflow-x: auto; text-overflow: ellipsis; scrollbar-width: none; }
+.markdown-body h1::-webkit-scrollbar, .markdown-body h2::-webkit-scrollbar, .markdown-body h3::-webkit-scrollbar, .markdown-body h4::-webkit-scrollbar, .markdown-body h5::-webkit-scrollbar, .markdown-body h6::-webkit-scrollbar { display: none; }
 .markdown-body h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
 .markdown-body h2 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
 .markdown-body h3 { font-size: 1.25em; }
@@ -799,8 +807,9 @@ function setTocActive(el, isChild) {
   if (!el) return;
   el.classList.add('active');
   if (!isChild && el.parentElement && el.parentElement.classList.contains('toc-list')) {
-    // 父级标题高亮时，清除其子标题列表的高亮（同段深层高亮较分散）
-    el.parentElement.querySelectorAll('.toc-item.active').forEach(x => x.classList.remove('active'));
+    // 父级标题高亮时，清除其子标题列表的残留高亮（同段深层高亮较分散）
+    // 注意：查 el 后代而非 el.parentElement——后者会把刚高亮的 el 自己也清掉，高亮永远不生效
+    el.querySelectorAll('.toc-item.active').forEach(x => x.classList.remove('active'));
   }
 }
 
@@ -875,8 +884,11 @@ function renderToc() {
     li.className = 'toc-item';
     const a = document.createElement('a');
     a.href = '#' + h.id;
-    a.textContent = (h.textContent || '').trim();
-    a.title = a.textContent;
+    const label = (h.textContent || '').trim();
+    const sp = document.createElement('span');
+    sp.textContent = label;
+    a.appendChild(sp);
+    a.title = label;
     a.addEventListener('click', (e) => {
       e.preventDefault();
       const viewEl = document.querySelector('.markdown-view');
