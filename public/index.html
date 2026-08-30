@@ -1041,7 +1041,7 @@ async function loadCourseList() {
       <div style="font-size:40px">🎓</div>
       <div>还没有任何课程</div>
       <button class="btn btn-primary" style="margin-top:4px" onclick="showCourseConfigDialog()">⚙ 添加课程根目录</button>
-      <div style="font-size:11px;opacity:0.6">根目录下含 <code>lessons/</code> 的子文件夹会自动识别为课程</div>
+      <div style="font-size:11px;opacity:0.6">根目录下（含多层子目录）含 <code>lessons/</code> 的文件夹会自动识别为课程</div>
     </div>`;
     return;
   }
@@ -1107,6 +1107,12 @@ function toggleCourseGroup(key) {
 
 // 打开课程（用 iframe 展示，保持相对路径引用）
 // title 不由 onclick 传入（避免引号转义问题），改为从已缓存的课程列表查
+// 课程文件路径按段编码：file 是相对 lessons|reference 目录的 POSIX 相对路径，
+// 可含子目录（如 module-1/0002-xxx.html），不能整体 encodeURIComponent（会把 / 编码掉）
+function encodeCoursePath(file) {
+  return String(file).split('/').map(encodeURIComponent).join('/');
+}
+
 // fromHistory: 后退/前进恢复时不重复压入历史栈（与知识库 loadFile 一致）
 function openCourse(wsId, kind, file, fromHistory) {
   const ws = courseDataCache.find(w => w.id === wsId);
@@ -1114,7 +1120,7 @@ function openCourse(wsId, kind, file, fromHistory) {
   const title = item ? item.title : file;
   currentCourse = { wsId, kind, file, title };
   isEditing = false;
-  const src = `/teach/${encodeURIComponent(wsId)}/${kind}/${encodeURIComponent(file)}`;
+  const src = `/teach/${encodeURIComponent(wsId)}/${kind}/${encodeCoursePath(file)}`;
 
   // 浏览器历史：导航时压入历史栈，重载/后退恢复时不重复压入
   if (!fromHistory) {
@@ -1154,7 +1160,7 @@ function openCourseInNewTab() {
   // 课程
   if (!currentCourse) return;
   const { wsId, kind, file } = currentCourse;
-  window.open(`/teach/${encodeURIComponent(wsId)}/${kind}/${encodeURIComponent(file)}`, '_blank');
+  window.open(`/teach/${encodeURIComponent(wsId)}/${kind}/${encodeCoursePath(file)}`, '_blank');
 }
 
 // 课程根目录配置对话框
@@ -1171,7 +1177,7 @@ async function showCourseConfigDialog() {
   overlay.innerHTML = `
     <div class="dialog" style="min-width:480px">
       <h3>⚙ 课程根目录</h3>
-      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会扫描这些目录的下一级子文件夹，自动发现含 <code>lessons/</code> 的教学 workspace。</div>
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录的多层子文件夹，自动发现含 <code>lessons/</code> 的教学 workspace。</div>
       <div id="roots-list" style="margin-bottom:12px"></div>
       <div style="display:flex;gap:6px;margin-bottom:16px">
         <input type="text" id="new-root" placeholder="例如 C:/Work/AI" style="flex:1;margin-bottom:0">
@@ -1224,7 +1230,7 @@ function renderRootsList() {
     } else if (!p.exists) {
       badge = '<span style="font-size:11px;color:var(--danger)" title="路径不存在">✗ 不存在</span>';
     } else if (!p.workspaces.length) {
-      badge = '<span style="font-size:11px;color:var(--text-secondary)" title="下一级没有含 lessons/ 的子文件夹">0 个课程目录</span>';
+      badge = '<span style="font-size:11px;color:var(--text-secondary)" title="递归扫描后没有找到含 lessons/ 的子文件夹">0 个课程目录</span>';
     } else {
       badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.workspaces.join(', '))}">✓ ${p.workspaces.length} 个 · ${escapeHtml(p.workspaces.join(', '))}</span>`;
     }

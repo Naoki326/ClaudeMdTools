@@ -325,7 +325,39 @@ function writeTeachConfig(config) {
   fs.writeFileSync(TEACH_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
 }
 
-// 扫描配置的 roots，发现所有教学 workspace（含 lessons/ 目录的子文件夹）
+// 递归发现教学 workspace 的最大深度（防止异常深的目录树拖垮扫描）
+const WORKSPACE_MAX_DEPTH = 8;
+
+// 递归多层扫描 rootPath，返回所有含 lessons/ 子目录的教学 workspace 目录（绝对路径）。
+// 与知识库的递归扫描对称：workspace 可以嵌套在任意深度的子目录中，不能只扫一层。
+// 规则：
+// - 命中含 lessons/ 的目录即登记为 workspace，且不再深入其内部
+//   （workspace 由 /teach 生成、结构固定：lessons/ reference/ assets/，
+//   内部不会嵌套独立 workspace；不深入可跳过 lessons 内大量文件的遍历）
+// - 未命中则继续逐层深入
+// - 排除 node_modules / .git 等常见无关目录（复用知识库排除集合）
+function findWorkspaceDirs(rootPath, excludedSet) {
+  const found = [];
+  const excluded = excludedSet || getExcludedSet();
+  (function walk(dir, depth) {
+    if (depth > WORKSPACE_MAX_DEPTH) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (isExcluded(path.join(dir, e.name), e.name, excluded)) continue;
+      const full = path.join(dir, e.name);
+      if (fs.existsSync(path.join(full, 'lessons'))) {
+        found.push(full);
+      } else {
+        walk(full, depth + 1);
+      }
+    }
+  })(rootPath, 1);
+  return found;
+}
+
+// 扫描配置的 roots，发现所有教学 workspace（任意深度下含 lessons/ 目录的文件夹）
 function discoverWorkspaces() {
   const config = readTeachConfig();
   const workspaces = [];
@@ -333,20 +365,15 @@ function discoverWorkspaces() {
   for (const root of config.roots || []) {
     const rootPath = resolveRoot(root);
     if (!fs.existsSync(rootPath)) continue;
-    let entries = [];
-    try { entries = fs.readdirSync(rootPath, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const wsPath = path.join(rootPath, entry.name);
-      const lessonsDir = path.join(wsPath, 'lessons');
-      if (!fs.existsSync(lessonsDir)) continue;
+    for (const wsPath of findWorkspaceDirs(rootPath)) {
+      const name = path.basename(wsPath);
       // 生成唯一 id（优先用目录名，重名时加序号后缀）
-      let id = entry.name;
+      let id = name;
       let n = 2;
-      while (usedIds.has(id)) { id = `${entry.name}-${n++}`; }
+      while (usedIds.has(id)) { id = `${name}-${n++}`; }
       usedIds.add(id);
       // 标题优先取 MISSION.md 的 "# Mission: xxx"，没有则回退文件夹名
-      workspaces.push({ id, name: entry.name, title: titleFromMission(wsPath) || entry.name, path: wsPath });
+      workspaces.push({ id, name, title: titleFromMission(wsPath) || name, path: wsPath });
     }
   }
   return workspaces;
@@ -368,27 +395,38 @@ function titleFromMission(wsPath) {
   } catch { return null; }
 }
 
+// 递归收集 kind 目录（lessons/ 或 reference/）下的课程 HTML 文件，
+// 子目录也要深入（如 lessons/module-1/0002-xxx.html），不能只扫一层。
+// file 字段为相对 kind 目录的 POSIX 相对路径（可含子目录），前端据此拼
+// /teach/<workspaceId>/<kind>/<file>，静态路由按多层路径解析。
+function collectCourseHtml(dir, base, acc) {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      collectCourseHtml(full, base, acc);
+    } else if (e.isFile() && /\.html$/i.test(e.name)) {
+      try {
+        const stat = fs.statSync(full);
+        const content = fs.readFileSync(full, 'utf-8');
+        acc.push({
+          file: path.relative(base, full).replace(/\\/g, '/'),
+          title: titleFromHtml(content) || e.name.replace(/\.html$/i, ''),
+          mtime: stat.mtimeMs,
+        });
+      } catch {}
+    }
+  }
+}
+
 // 列出某个 workspace 下的课程与速查卡
 function getWorkspaceContent(wsPath) {
   const result = { lessons: [], reference: [] };
   for (const kind of ['lessons', 'reference']) {
     const dir = path.join(wsPath, kind);
     if (!fs.existsSync(dir)) continue;
-    let files = [];
-    try { files = fs.readdirSync(dir); } catch { continue; }
-    for (const f of files) {
-      if (!f.endsWith('.html')) continue;
-      const fp = path.join(dir, f);
-      try {
-        const stat = fs.statSync(fp);
-        const content = fs.readFileSync(fp, 'utf-8');
-        result[kind].push({
-          file: f,
-          title: titleFromHtml(content) || f.replace(/\.html$/, ''),
-          mtime: stat.mtimeMs,
-        });
-      } catch {}
-    }
+    collectCourseHtml(dir, dir, result[kind]);
     result[kind].sort((a, b) => a.file.localeCompare(b.file));
   }
   return result;
@@ -436,11 +474,9 @@ app.post('/api/courses/preview', (req, res) => {
     if (!fs.existsSync(rootPath)) {
       return { root, exists: false, workspaces: [] };
     }
-    let entries = [];
-    try { entries = fs.readdirSync(rootPath, { withFileTypes: true }); } catch {}
-    const wss = entries
-      .filter(e => e.isDirectory() && fs.existsSync(path.join(rootPath, e.name, 'lessons')))
-      .map(e => e.name);
+    // 递归多层发现；元素用相对根目录的路径（含中间层），嵌套/同名工作区可区分
+    const wss = findWorkspaceDirs(rootPath)
+      .map(p => path.relative(rootPath, p).replace(/\\/g, '/'));
     return { root, exists: true, workspaces: wss };
   });
   res.json({ preview: result });
