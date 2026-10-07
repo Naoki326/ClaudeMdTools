@@ -325,8 +325,9 @@ test('扩展依赖包内 lib/link-host.js 解析链接地址（tarball 里两者
   // 解包到干净目录，模拟 npm 安装后的包布局
   const unpacked = path.join(dest, 'unpacked');
   fs.mkdirSync(unpacked, { recursive: true });
-  // 以 dest 为 cwd 并只传文件名：GNU tar 会把带盘符的 -f 参数误判为远程主机（C: → 连接失败）
-  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', unpacked],
+  // 以 dest 为 cwd 并只传文件名：GNU tar 会把带盘符的参数误判为远程主机（C: → 连接失败）；
+  // -C 同理传相对目录名（由 tar 自行 chdir），不传绝对 Windows 路径（GNU tar 打不开）
+  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', 'unpacked'],
     { cwd: dest, encoding: 'utf-8', timeout: 60000 });
   assert.equal(untar.status, 0, `解包失败: ${untar.stderr}`);
 
@@ -398,7 +399,9 @@ test('pi 在干净配置目录下安装 lanbook 包后，/lanbook 命令被注�
   const { tarball } = npmPack(path.join(base, 'pack'));
   const unpacked = path.join(base, 'unpacked');
   fs.mkdirSync(unpacked, { recursive: true });
-  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', unpacked],
+  // -C 传相对路径（cwd 在 pack 目录，unpacked 在其上一级）：
+  // GNU tar 打不开带盘符的绝对 Windows 路径
+  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', `../${path.basename(unpacked)}`],
     { cwd: path.dirname(tarball), encoding: 'utf-8', timeout: 60000 });
   assert.equal(untar.status, 0, `解包失败: ${untar.stderr}`);
   const pkgRoot = path.join(unpacked, 'package');

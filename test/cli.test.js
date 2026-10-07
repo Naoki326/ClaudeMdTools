@@ -257,12 +257,14 @@ test('lanbook open：服务未运行时后台启动，端口可访问并拉起�
   const browserLog = path.join(base, 'browser-calls.log');
   const browserScript = writeDummyBrowser(base);
 
+  // open 只认 settings.json（宿主环境残留的 PORT 与 lanbook 服务无关）：
+  // 端口配置写入数据目录 settings.json，而非 PORT 环境变量
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port }) + '\n', 'utf-8');
   const r = await runCli({
     installDir,
     args: ['open'],
     env: {
       LANBOOK_HOME: dataDir,
-      PORT: String(port),
       BROWSER: `${process.execPath} ${browserScript}`,
       DUMMY_BROWSER_LOG: browserLog,
     },
@@ -284,7 +286,10 @@ test('lanbook open：服务未运行时后台启动，端口可访问并拉起�
 
 test('lanbook open：服务已运行时不重复启动，直接打开浏览器', async t => {
   const { base, installDir, dataDir } = setup(t, 'lanbook-cli-open-up-');
-  const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir } });
+  // 服务与 open 双方都以 settings.json 为准：无 PORT env 直启 + 配置写盘
+  const port = await freePort();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port }) + '\n', 'utf-8');
+  const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir }, port });
   const browserLog = path.join(base, 'browser-calls.log');
   const browserScript = writeDummyBrowser(base);
 
@@ -293,7 +298,6 @@ test('lanbook open：服务已运行时不重复启动，直接打开浏览器',
     args: ['open'],
     env: {
       LANBOOK_HOME: dataDir,
-      PORT: String(srv.port),
       BROWSER: `${process.execPath} ${browserScript}`,
       DUMMY_BROWSER_LOG: browserLog,
     },
@@ -352,12 +356,15 @@ test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows�
 
 test('lanbook stop：停止正在运行的服务并释放端口', async t => {
   const { installDir, dataDir } = setup(t, 'lanbook-cli-stop-');
-  const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir } });
+  // stop 只认 settings.json：服务无 PORT env 直启在配置端口，stop 扫同源端口
+  const port = await freePort();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port }) + '\n', 'utf-8');
+  const srv = await startServer({ t, installDir, env: { LANBOOK_HOME: dataDir }, port });
 
   const r = await runCli({
     installDir,
     args: ['stop'],
-    env: { LANBOOK_HOME: dataDir, PORT: String(srv.port) },
+    env: { LANBOOK_HOME: dataDir },
   });
   assert.equal(r.code, 0, `stop 应成功\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
   assert.ok(r.stdout.includes('已停止'), 'stdout 应说明已停止');
@@ -376,9 +383,10 @@ test('lanbook stop：停止正在运行的服务并释放端口', async t => {
 
 test('lanbook stop：服务未运行时友好提示、零副作用', async t => {
   const { installDir, dataDir } = setup(t, 'lanbook-cli-stop-idle-');
-  // 找一个大概率没人监听的端口写进 PORT
-  const free = 40000 + Math.floor(Math.random() * 10000);
-  const r = await runCli({ installDir, args: ['stop'], env: { LANBOOK_HOME: dataDir, PORT: String(free) } });
+  // 随机空闲端口写进 settings.json（stop 只认 settings.json，避免默认 8080 被占的偶发）
+  const free = await freePort();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port: free }) + '\n', 'utf-8');
+  const r = await runCli({ installDir, args: ['stop'], env: { LANBOOK_HOME: dataDir } });
   assert.equal(r.code, 0, `未运行时 stop 也应成功退出\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
   assert.ok(r.stdout.includes('未在运行'), 'stdout 应说明服务未在运行');
 });
