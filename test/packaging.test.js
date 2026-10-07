@@ -10,6 +10,51 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { mkTempDir, makeInstallDir, removeInstallDir, startServer, sleep, freePort, REPO_ROOT } = require('./helpers');
 
+// 定位 pi 可执行。Windows 上 spawn 不能直接执行 .cmd，优先用 node 直跑 pi 的入口脚本；
+// pi 装在全局 npm 前缀下（不一定与 node 同目录，如 %APPDATA%\npm），
+// 因此按「候选根目录 × 候选入口」探测，最后回落到经 cmd 跑 npm shim。
+function piCommand() {
+  if (process.platform === 'win32') {
+    const roots = [];
+    if (process.env.APPDATA) roots.push(path.join(process.env.APPDATA, 'npm'));
+    roots.push(path.join(path.dirname(process.execPath))); // node 与 npm 同装时
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+      if (dir && /npm/i.test(dir)) roots.push(dir);
+    }
+    const entries = ['dist/bundle/cli.js', 'dist/cli.js', 'dist/cli/main.js', 'dist/main.js'];
+    for (const root of roots) {
+      for (const rel of entries) {
+        const entry = path.join(root, 'node_modules', '@earendil-works', 'pi-coding-agent', ...rel.split('/'));
+        if (fs.existsSync(entry)) return [process.execPath, [entry]];
+      }
+    }
+    // 兜底：npm 生成的 shim（Windows 上是 .cmd 批处理，需经 cmd）
+    for (const root of roots) {
+      const shim = path.join(root, 'pi.cmd');
+      if (fs.existsSync(shim)) return [process.env.comspec || 'cmd.exe', ['/c', shim]];
+    }
+  }
+  return ['pi', []];
+}
+
+// 经 RPC 问 pi「你注册了哪些命令」，返回命令名数组。
+// 用独立的 PI_CODING_AGENT_DIR（干净配置目录）避免受本机已装包 / 全局扩展干扰。
+async function piCommands(env) {
+  const [bin, prefix] = piCommand();
+  const child = spawn(bin, [...prefix, '--mode', 'rpc', '--no-session'], {
+    env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+  let out = '';
+  let err = '';
+  child.stdout.on('data', d => { out += d; });
+  child.stderr.on('data', d => { err += d; });
+  child.stdin.write(JSON.stringify({ id: '1', type: 'get_commands' }) + '\n');
+  await sleep(15000);
+  killTree(child);
+  const names = [...out.matchAll(/"name":"([^"]+)"/g)].map(m => m[1]);
+  return { names, out, err };
+}
+
 // 定位 npm 可执行：Windows 上 spawn 不能直接执行 .cmd，改用 node 直跑 npm-cli.js
 function npmCommand() {
   if (process.platform === 'win32') {
@@ -28,6 +73,7 @@ function packAllowed(p) {
     || p === 'teach.config.example.json'
     || p.startsWith('bin/')
     || p.startsWith('lib/')
+    || p.startsWith('extensions/')
     || p.startsWith('public/');
 }
 
@@ -91,7 +137,8 @@ test('npm pack 产物只含白名单内容（服务端 / bin / 前端含 vendor 
   // 白名单关键内容必须在
   const mustHave = [
     'package.json', 'README.md', 'server.js',
-    'bin/lanbook.js', 'lib/data-dir.js', 'lib/settings.js',
+    'bin/lanbook.js', 'lib/data-dir.js', 'lib/settings.js', 'lib/link-host.js',
+    'extensions/lanbook-open.ts',
     'public/index.html', 'public/vendor/marked.min.js',
     'public/vendor/highlight.min.js', 'public/vendor/mermaid.min.js',
     'public/vendor/katex.min.js', 'public/vendor/katex.min.css',
@@ -240,4 +287,164 @@ test('热刷新回归（依赖收敛后）：根目录文件变化经 WebSocket 
   }
   assert.ok(messages.some(m => m.type === 'knowledge-change'),
     `未收到 knowledge-change 事件，实际收到: ${JSON.stringify(messages)}`);
+});
+
+// —— pi 包可发现性（lanbook 1.6.0 起随包分发 /lanbook 命令）——
+// 这些测试回答的是：「pi install npm:lanbook 之后，/lanbook 命令会不会出现」。
+// 此前不会——包内既无 pi 清单也无 extensions/ 目录，pi 无从发现资源。
+
+test('package.json 声明 pi 包清单：pi.extensions 指向包内扩展，且随 files 白名单分发', async () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf-8'));
+
+  // 可发现性的三个必要条件
+  assert.ok(pkg.keywords.includes('pi-package'),
+    'package.json keywords 必须含 pi-package（npm 画廊与 pi 发现依赖它）');
+  assert.ok(pkg.pi && Array.isArray(pkg.pi.extensions) && pkg.pi.extensions.length > 0,
+    'package.json 必须声明 pi.extensions 清单');
+  assert.ok(pkg.files.includes('extensions/'),
+    'files 白名单必须包含 extensions/，否则扩展不会进 tarball');
+
+  // 清单里每条路径都必须真实存在（拼错路径 = 命令静默不出现）
+  for (const rel of pkg.pi.extensions) {
+    const abs = path.join(REPO_ROOT, rel);
+    assert.ok(fs.existsSync(abs), `pi.extensions 指向的路径不存在: ${rel}`);
+  }
+
+  // 宿主提供的包必须放 peerDependencies，不能进 dependencies（否则重复实例化）
+  assert.equal(pkg.peerDependencies?.['@earendil-works/pi-coding-agent'], '*',
+    'pi-coding-agent 必须在 peerDependencies 里声明 *');
+  assert.ok(!pkg.dependencies?.['@earendil-works/pi-coding-agent'],
+    'pi-coding-agent 不得出现在 dependencies');
+});
+
+test('扩展依赖包内 lib/link-host.js 解析链接地址（tarball 里两者同在，安装后路径仍成立）', async t => {
+  const dest = mkTempDir('lanbook-pack-ext-');
+  t.after(() => { try { fs.rmSync(dest, { recursive: true, force: true }); } catch {} });
+
+  const { tarball } = npmPack(dest);
+  // 解包到干净目录，模拟 npm 安装后的包布局
+  const unpacked = path.join(dest, 'unpacked');
+  fs.mkdirSync(unpacked, { recursive: true });
+  // 以 dest 为 cwd 并只传文件名：GNU tar 会把带盘符的 -f 参数误判为远程主机（C: → 连接失败）
+  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', unpacked],
+    { cwd: dest, encoding: 'utf-8', timeout: 60000 });
+  assert.equal(untar.status, 0, `解包失败: ${untar.stderr}`);
+
+  const pkgRoot = path.join(unpacked, 'package');
+  const extPath = path.join(pkgRoot, 'extensions', 'lanbook-open.ts');
+  const libPath = path.join(pkgRoot, 'lib', 'link-host.js');
+  assert.ok(fs.existsSync(extPath), 'tarball 内应含 extensions/lanbook-open.ts');
+  assert.ok(fs.existsSync(libPath), 'tarball 内应含 lib/link-host.js');
+
+  // 扩展里的 createRequire("../lib/link-host.js") 在安装后的布局下必须解析成功
+  const { createRequire } = require('node:module');
+  const req = createRequire(extPath);
+  const mod = req('../lib/link-host.js');
+  assert.equal(typeof mod.resolveLinkHost, 'function', '解包后的 lib/link-host.js 应可被扩展加载');
+
+  // 端到端：用解包副本解析一个回环 host 配置，确认修复在分发形态下依然生效
+  const dataDir = path.join(dest, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'settings.json'),
+    JSON.stringify({ port: 30142, host: '127.0.0.1' }), 'utf-8');
+  const info = mod.resolveLinkHost(dataDir, { interfaces: {}, env: {} });
+  assert.equal(info.host, '127.0.0.1', '分发包里的扩展也必须尊重 host: 127.0.0.1');
+  assert.equal(info.port, 30142);
+});
+
+test('扩展源码不含「临时改写 knowledge.config.json 再回滚」的危险路径', async () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'extensions', 'lanbook-open.ts'), 'utf-8');
+
+  // 原先 fileUrl() 会 writeKnowledgeConfig() 加 root、构造 URL、再删掉；
+  // 中途失败/并发会留下脏 roots。现在改为经服务端配置 API 且需用户确认。
+  assert.ok(!/writeKnowledgeConfig/.test(src),
+    '扩展不应直接写 knowledge.config.json（应走服务端 /api/knowledge/config）');
+  assert.ok(/\/api\/knowledge\/config/.test(src),
+    '加根目录应经服务端配置 API（服务端会顺带刷新 watcher）');
+  assert.ok(/ui\.confirm/.test(src),
+    '把外部目录加入知识库前必须经用户确认');
+  assert.ok(/resolveLinkHost|link-host/.test(src),
+    '链接主机解析应复用 lib/link-host.js，而不是本地另写一份 host 语义');
+});
+
+// ADR-0004：host/端口 → 链接地址的推导只能有一份实现。
+// 旧版扩展自己写了一套（且忽略 host），产出打不开的链接——本测试防止它再次长回来。
+test('扩展不含本地 host/端口解析实现（ADR-0004：link-host 是唯一真相）', async () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'extensions', 'lanbook-open.ts'), 'utf-8');
+
+  // 不得自带地址探测 / host 判定 / 端口回落
+  const forbidden = [
+    [/networkInterfaces/, '不得自己枚举网卡探测地址'],
+    [/detectLanIp/, '不得自带局域网 IP 探测'],
+    [/resolveHostInfo/, '不得自带 host 回环/通配判定'],
+    [/WILDCARD_HOSTS|LOOPBACK_HOSTS/, '不得自带 host 分类表'],
+    [/function resolvePort/, '不得自带端口回落（应由 link-host 统一提供）'],
+  ];
+  for (const [re, why] of forbidden) {
+    assert.ok(!re.test(src), `${why}（ADR-0004：改为调用 lib/link-host.js）`);
+  }
+
+  // 不得为 link-host 缺失提供「猜地址」的降级实现（静默回落到错误行为正是原 bug 成因）
+  assert.ok(!/catch\s*{[^}]*\/\*\s*降级/.test(src) && !/linkHostLib\s*=\s*null;[\s\S]{0,200}detectLanIp/.test(src),
+    'link-host 缺失时应明确报错，不得静默降级为本地探测');
+});
+
+test('pi 在干净配置目录下安装 lanbook 包后，/lanbook 命令被注册', async t => {
+  const base = mkTempDir('lanbook-pi-pkg-');
+  t.after(() => { try { fs.rmSync(base, { recursive: true, force: true }); } catch {} });
+
+  // 用 npm pack 产物解包后的目录作为安装源：与真实 npm 安装一致，
+  // 会受 files 白名单约束（本地仓库路径源不会，会掩盖「扩展没进包」的问题）
+  const { tarball } = npmPack(path.join(base, 'pack'));
+  const unpacked = path.join(base, 'unpacked');
+  fs.mkdirSync(unpacked, { recursive: true });
+  const untar = spawnSync('tar', ['-xzf', path.basename(tarball), '-C', unpacked],
+    { cwd: path.dirname(tarball), encoding: 'utf-8', timeout: 60000 });
+  assert.equal(untar.status, 0, `解包失败: ${untar.stderr}`);
+  const pkgRoot = path.join(unpacked, 'package');
+
+  // 干净配置目录：不继承本机已装的包与全局扩展
+  const agentDir = path.join(base, 'agent');
+  fs.mkdirSync(agentDir, { recursive: true });
+  const env = { ...process.env, PI_CODING_AGENT_DIR: agentDir };
+
+  const [bin, prefix] = piCommand();
+  const install = spawnSync(bin, [...prefix, 'install', pkgRoot],
+    { env, encoding: 'utf-8', timeout: 180000, windowsHide: true });
+  if (install.status !== 0) {
+    t.skip(`pi install 失败（疑似 pi 不可用），跳过命令注册冒烟\n${install.stderr}`);
+    return;
+  }
+
+  const { names, out, err } = await piCommands(env);
+  assert.ok(names.includes('lanbook'),
+    `pi 未注册 /lanbook 命令。已注册: ${names.join(', ')}\n--- stdout ---\n${out}\n--- stderr ---\n${err}`);
+});
+
+// 同名命令双注册的真实后果：pi 会把它们改名为 lanbook:1 / lanbook:2，
+// 用户的 /lanbook 直接失效。这是「旧版手工扩展 + 新包内扩展」并存的必然结果，
+// README 的升级警告就为它而写——这里把行为钉死，防止警告被当成多余的话删掉。
+test('同名命令双注册 → pi 改名 lanbook:1/:2（故升级必须先删旧手工扩展）', async t => {
+  const base = mkTempDir('lanbook-pi-dup-');
+  t.after(() => { try { fs.rmSync(base, { recursive: true, force: true }); } catch {} });
+
+  // 两个同名命令的扩展：分别来自「旧手工位置」与「包内」
+  const agentDir = path.join(base, 'agent');
+  const extDir = path.join(agentDir, 'extensions');
+  fs.mkdirSync(extDir, { recursive: true });
+  const pkgExt = path.join(REPO_ROOT, 'extensions', 'lanbook-open.ts');
+  fs.copyFileSync(pkgExt, path.join(extDir, 'lanbook-open.ts')); // 模拟遗留的手工扩展
+  fs.writeFileSync(path.join(agentDir, 'settings.json'),
+    JSON.stringify({ packages: [REPO_ROOT] }), 'utf-8'); // 包内同名扩展
+
+  const env = { ...process.env, PI_CODING_AGENT_DIR: agentDir };
+  const { names } = await piCommands(env);
+
+  // 注意：断言的是「退化形态」本身——若 pi 将来改成去重，这里会失败，
+  // 提醒我们回头更新 README 的升级警告。
+  const plain = names.filter(n => n === 'lanbook');
+  const suffixed = names.filter(n => /^lanbook:\d+$/.test(n));
+  assert.equal(plain.length, 0, '双注册时不应存在可用的 /lanbook（已被改名）');
+  assert.ok(suffixed.length >= 2,
+    `双注册应产生 lanbook:1 / lanbook:2 形式，实际命令: ${names.join(', ')}`);
 });

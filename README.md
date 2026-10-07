@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.5.1-blue)
+![version](https://img.shields.io/badge/version-1.6.0-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -107,6 +107,28 @@ lanbook --version          # 显示版本号（lanbook help 查看完整帮助�
 ### 端口与监听地址
 
 端口默认 8080。改端口：`lanbook config port 8090`；仅本机访问：`lanbook config host 127.0.0.1`（`lanbook config <key>` 可查看当前生效值与来源）。两者写入数据目录 `settings.json`，重启生效；临时改端口也可用环境变量 `PORT=8090 lanbook`。
+
+### 在 pi 里用 /lanbook 生成链接
+
+包内自带 pi 扩展，装上后多一条 `/lanbook` 命令：选中的 Markdown / HTML 直接在浏览器（手机也行）打开。
+
+```bash
+pi install npm:lanbook
+```
+
+```
+/lanbook              # 弹出知识库文件选择器
+/lanbook README.md    # 指定文件，输出可点击链接
+/lanbook ~/docs       # 目录 → 输出知识库首页链接
+```
+
+链接主机名跟着服务配置走：`host: 127.0.0.1` 时只给回环地址并提示仅本机可用；默认 `0.0.0.0` 时自动挑一个局域网 IP（优先真实私网，`192.168` > `10.x` > `172.16-31` > Tailscale `100.64/10`）。文件不在任何根目录下时会先问你要不要把它所在目录加为根目录。
+
+> **从旧版手工扩展升级**：早期 `/lanbook` 来自手工放在 `~/.pi/agent/extensions/lanbook-open.ts` 的独立扩展。装上本包后请删掉它，否则同名命令会注册两次：
+>
+> ```bash
+> rm ~/.pi/agent/extensions/lanbook-open.ts
+> ```
 
 ### 开发者选项（源码模式）
 
@@ -230,14 +252,15 @@ schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路�
 
 ## 🛠 技术栈
 
-**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · 本地 vendor（marked / highlight.js / mermaid 随包分发）　**常驻** 内置 autostart 命令 / nssm（可选）
+**后端** Express 5 · ws · chokidar · marked　**前端** 原生 HTML/CSS/JS · 本地 vendor（marked / highlight.js / mermaid 随包分发）　**常驻** 内置 autostart 命令 / nssm（可选）　**AI 集成** pi 扩展（`pi install npm:lanbook`）
 
 ## 📁 项目结构
 
 ```
 lanbook/
 ├── bin/lanbook.js                  # CLI 入口（open / add / config / autostart / stop）
-├── lib/                            # 数据目录、服务配置
+├── extensions/lanbook-open.ts      # pi 扩展（/lanbook 命令，随包分发）
+├── lib/                            # 数据目录、服务配置、链接主机解析
 ├── server.js                       # Express + WebSocket 服务端
 ├── public/                         # 单页前端 + vendor 静态资产
 ├── test/                           # 进程边界测试

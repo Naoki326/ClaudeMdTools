@@ -1,6 +1,6 @@
 {
   "name": "lanbook",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "本地知识库 + 课程查看器：直接读取外部文件夹的 .md / HTML 课程，按项目分类，实时更新，在线编辑",
   "main": "server.js",
   "bin": {
@@ -13,10 +13,19 @@
     "server.js",
     "lib/",
     "bin/",
+    "extensions/",
     "public/",
     "knowledge.config.example.json",
     "teach.config.example.json"
   ],
+  "pi": {
+    "extensions": [
+      "./extensions/lanbook-open.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "npx nodemon server.js",
@@ -28,7 +37,8 @@
     "lanbook",
     "local-network",
     "course-viewer",
-    "express"
+    "express",
+    "pi-package"
   ],
   "author": "zzy <zhiyuan_zheng@roboticplus.com>",
   "license": "ISC",
