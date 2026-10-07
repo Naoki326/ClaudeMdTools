@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.6.0-blue)
+![version](https://img.shields.io/badge/version-1.6.1-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -120,10 +120,17 @@ pi install npm:lanbook
 /lanbook              # 弹出知识库文件选择器
 /lanbook README.md    # 指定文件，输出可点击链接
 /lanbook ~/docs       # 目录 → 输出知识库首页链接
+/lanbook autostart    # 开启开机自启（登录 + 解锁触发，崩溃自动重启）
+/lanbook status       # 查看服务与自启状态（服务没起来时先跑这个）
+/lanbook help         # 列出全部用法
 ```
+
+**只需装这一份包**：pi 装的包里就带着完整的 lanbook 服务端与 CLI，因此 `/lanbook autostart` 一条命令即可注册开机自启，**不需要再 `npm i -g lanbook`**。自启脚本指向包内的 `server.js`，注册时自动写入正确路径。
 
 链接主机名跟着服务配置走：`host: 127.0.0.1` 时只给回环地址并提示仅本机可用；默认 `0.0.0.0` 时自动挑一个局域网 IP（优先真实私网，`192.168` > `10.x` > `172.16-31` > Tailscale `100.64/10`）。文件不在任何根目录下时会先问你要不要把它所在目录加为根目录。
 
+> **升级 / 卸载后请重跑 `/lanbook status`**：自启脚本里的 `server.js` 是绝对路径，若包被移除或换到另一份安装，路径会失效而任务仍显示「就绪」。`/lanbook status` 会直接指出路径不存在并给出修复命令（`/lanbook autostart`）。
+>
 > **从旧版手工扩展升级**：早期 `/lanbook` 来自手工放在 `~/.pi/agent/extensions/lanbook-open.ts` 的独立扩展。装上本包后请删掉它，否则同名命令会注册两次：
 >
 > ```bash

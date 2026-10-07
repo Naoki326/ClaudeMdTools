@@ -21,7 +21,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { exec } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { exec, execFile, spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // 链接主机解析与服务端共用 lib/link-host.js（同一份 port/host 语义，不再各写一遍）。
@@ -83,6 +84,31 @@ function autostartCmdPath(): string {
   return path.join(dataDir(), "autostart-task.cmd");
 }
 
+// 包内 CLI 路径：扩展与 CLI 同属一个包（extensions/ 与 bin/ 同级），
+// 所以 pi 安装的这份包里就带着完整的 lanbook 服务端与 CLI——
+// 用户不需要额外 npm i -g，一条 /lanbook autostart 就能注册自启。
+function packagedCli(): string | null {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const cli = path.resolve(here, "..", "bin", "lanbook.js");
+    return fs.existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+
+// 调包内 CLI（用 execFile 传数组，不经 shell，免引号与路径空格问题）
+async function runCli(args: string[], timeoutMs = 60000): Promise<{ code: number; out: string; err: string }> {
+  const cli = packagedCli();
+  if (!cli) return { code: -1, out: "", err: "找不到包内 CLI（bin/lanbook.js）" };
+  return new Promise((resolve) => {
+    execFile(process.execPath, [cli, ...args], { windowsHide: true, timeout: timeoutMs },
+      (e: any, stdout: string, stderr: string) => {
+        resolve({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, out: String(stdout || ""), err: String(stderr || "") });
+      });
+  });
+}
+
 // ---------------------------------------------------------------- 服务探测 / 拉起
 
 async function fetchJson(url: string, timeoutMs = 4000): Promise<any> {
@@ -108,15 +134,24 @@ async function serviceUp(port: number): Promise<boolean> {
 
 function startLanbook(port: number): Promise<void> {
   return new Promise((resolve) => {
-    // 复用 lanbook 自带的 autostart-task.cmd（隐藏窗口后台启动，日志追加到 ~/.lanbook/logs/service.log）
+    // 首选自启脚本：它带守护循环（崩溃后 3 秒自动重启）
     const cmd = autostartCmdPath();
     if (fs.existsSync(cmd)) {
       exec(`cmd /c start "" "${cmd}"`, { windowsHide: true }, () => resolve());
-    } else {
-      // 兜底：直接 node server.js（源码模式路径）
-      const server = path.join(process.cwd(), "server.js");
-      exec(`cmd /c start "" node "${server}"`, { windowsHide: true }, () => resolve());
+      return;
     }
+    // 未注册自启：用包内 CLI 起（而不是 cwd 下的 server.js——
+    // pi 包的扩展运行时 cwd 是用户项目目录，那里没有 server.js）
+    const cli = packagedCli();
+    if (cli) {
+      try {
+        const child = spawn(process.execPath, [cli], { detached: true, stdio: "ignore", windowsHide: true });
+        child.unref();
+      } catch {}
+      resolve();
+      return;
+    }
+    resolve();
   });
 }
 
@@ -342,19 +377,116 @@ async function resolveLinkTarget(
   }
 }
 
+// ---------------------------------------------------------------- 子命令
+
+// /lanbook autostart —— 一条命令完成「开机自动启动」
+// 链路：注册 Windows 计划任务（登录 + 解锁触发）→ 守护脚本拉起包内 server.js。
+// 自启脚本里的 server.js 绝对路径由包内 CLI 自己写入，扩展不重复拼路径。
+async function cmdAutostart(pi: ExtensionAPI, ctx: any, remove: boolean): Promise<void> {
+  if (process.platform !== "win32") {
+    ctx.ui.notify("autostart 目前仅支持 Windows；macOS 用 launchd，Linux 用 systemd user 单元", "warning");
+    return;
+  }
+  const { code, out, err } = await runCli(remove ? ["autostart", "--remove"] : ["autostart"]);
+  const text = (out + err).trim();
+  if (code !== 0) {
+    ctx.ui.notify(`autostart 失败：${text || "未知错误"}`, "error");
+    return;
+  }
+  // CLI 输出多行说明，取有信息量的首行作为通知，完整内容随消息落盘
+  const firstLine = text.split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+  await pi.sendMessage(
+    {
+      customType: "lanbook-autostart",
+      content: `${remove ? "已卸载" : "已注册"} lanbook 开机自启\n\n\`\`\`\n${text}\n\`\`\``,
+      display: true,
+    },
+    { deliverAs: "nextTurn" },
+  );
+  ctx.ui.notify(remove ? "已卸载自启" : `已注册自启：${firstLine}`, "info");
+}
+
+// /lanbook status —— 看服务是否在跑、跑的是哪份代码、自启是否已注册
+// 这是排查「为什么服务没起来」的第一站（路径指向已删除安装目录是常见原因）。
+async function cmdStatus(pi: ExtensionAPI, ctx: any): Promise<void> {
+  const { port, host, loopback } = linkHost();
+  const up = await serviceUp(port);
+  const lines: string[] = [];
+  lines.push(`服务：${up ? `运行中 http://${host}:${port}` : `未运行（端口 ${port} 无响应）`}`);
+  if (up && loopback) lines.push("监听：仅本机（settings.json 的 host 已收敛到回环）");
+
+  const cmdPath = autostartCmdPath();
+  if (fs.existsSync(cmdPath)) {
+    // 自启脚本里写死了 server.js 绝对路径；卸载/重装包后可能指向已不存在的副本
+    const m = fs.readFileSync(cmdPath, "utf-8").match(/"([^"]*server\.js)"/);
+    const target = m ? m[1] : null;
+    if (target && fs.existsSync(target)) {
+      lines.push(`自启：已注册，指向 ${target}`);
+    } else {
+      lines.push(`自启：已注册，但指向的 server.js 不存在 —— ${target || "无法解析"}`);
+      lines.push(`     修复：/lanbook autostart`);
+    }
+  } else {
+    lines.push("自启：未注册（/lanbook autostart 可开启开机自启）");
+  }
+
+  const cli = packagedCli();
+  lines.push(`包内 CLI：${cli || "未找到"}`);
+  await pi.sendMessage(
+    { customType: "lanbook-status", content: lines.join("\n"), display: true },
+    { deliverAs: "nextTurn" },
+  );
+  ctx.ui.notify(up ? `lanbook 运行中（${host}:${port}）` : "lanbook 未运行", up ? "info" : "warning");
+}
+
 // ---------------------------------------------------------------- 命令
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("lanbook", {
     description:
-      "输出 Markdown / HTML 文件在 lanbook 的可点击链接（局域网内任何设备可打开）。用法: /lanbook [路径]，无参数时弹出知识库文件选择器",
+      "lanbook 知识库：链接文件到浏览器 / 开启开机自启。用法: /lanbook [路径] | autostart [--remove] | status",
     handler: async (args, ctx) => {
+      const trimmed = (args || "").trim();
+
+      // 子命令优先：这些不需要服务先跑起来
+      const [sub, ...rest] = trimmed.split(/\s+/);
+      if (sub === "autostart") {
+        await cmdAutostart(pi, ctx, rest.includes("--remove"));
+        return;
+      }
+      if (sub === "status") {
+        await cmdStatus(pi, ctx);
+        return;
+      }
+      if (sub === "help" || sub === "--help" || sub === "-h") {
+        await pi.sendMessage(
+          {
+            customType: "lanbook-help",
+            content: [
+              "**/lanbook** — 用法",
+              "",
+              "| 命令 | 作用 |",
+              "|---|---|",
+              "| `/lanbook` | 弹出知识库文件选择器 |",
+              "| `/lanbook <路径>` | 输出该文件的浏览器链接（局域网内任何设备可打开）|",
+              "| `/lanbook <目录>` | 输出知识库首页链接 |",
+              "| `/lanbook autostart` | **注册开机自启**（登录 + 解锁触发，崩溃自动重启）|",
+              "| `/lanbook autostart --remove` | 卸载自启 |",
+              "| `/lanbook status` | 查看服务与自启状态（排查服务没起来）|",
+            ].join("\n"),
+            display: true,
+          },
+          { deliverAs: "nextTurn" },
+        );
+        return;
+      }
+
       const { host: baseHost, port, loopback } = linkHost();
       const base = `http://${baseHost}:${port}`;
 
-      // 1. 确保 lanbook 服务可用
+      // 确保 lanbook 服务可用
       if (!(await ensureLanbook(port))) {
-        ctx.ui.notify(`无法启动 lanbook 服务 (端口 ${port})`, "error");
+        ctx.ui.notify(`无法启动 lanbook 服务 (端口 ${port})。可用 /lanbook status 排查`, "error");
         return;
       }
       // host 收敛到回环时局域网不可达，明确告知，避免拿到打不开的链接后困惑
@@ -362,7 +494,6 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`lanbook host 已收敛到回环，链接仅本机可打开（改 ~/.lanbook/settings.json 的 host 可放开）`, "warning");
       }
 
-      const trimmed = (args || "").trim();
       if (!trimmed) {
         // 无参数 → 选择器
         await pickFromKnowledge(port, ctx, pi, base);
