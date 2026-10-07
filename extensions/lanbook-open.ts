@@ -8,7 +8,7 @@
  *
  * 行为：
  *   - 自动探测 lanbook 服务（端口来自 ~/.lanbook/settings.json，默认 8080）
- *   - 服务未运行时自动拉起（复用 ~/.lanbook/autostart-task.cmd），轮询等待就绪
+ *   - 服务未运行时自动拉起（已注册自启时经服务管理器拉起，自带崩溃自愈），轮询等待就绪
  *   - 链接使用本机局域网 IP（自动探测）；但 host 收敛到回环时只给 127.0.0.1 并提示
  *   - 本机使用时可选择同时自动打开浏览器（配置 openLocalBrowser，默认开启）
  *   - .md 文件 → /api/knowledge/view（Markdown 渲染）
@@ -42,6 +42,21 @@ try {
 } catch (e: any) {
   linkHostError = e?.message || String(e);
 }
+
+// 自启状态描述也复用 lib/autostart.js（win=计划任务+CMD 守护、mac=launchd、linux=systemd）。
+// 注册 / 卸载 / 状态判断一份真相，扩展不自己拼路径或猜平台差异（见 ADR-0005）。
+interface AutostartLib {
+  describeAutostart: (opts?: { dataDir?: string }) => {
+    registered: boolean;
+    via: string | null;
+    target: string | null;
+    launcher: { cmd: string; args: string[] } | null;
+  };
+}
+let autostartLib: AutostartLib | null = null;
+try {
+  autostartLib = require_("../lib/autostart.js");
+} catch {}
 
 // ---------------------------------------------------------------- 配置
 
@@ -80,8 +95,14 @@ function readKnowledgeConfig(): { roots: string[]; excludeDirs?: string[] } {
   }
 }
 
-function autostartCmdPath(): string {
-  return path.join(dataDir(), "autostart-task.cmd");
+// 自启状态描述（跨平台）：已注册与否 / 指向哪份 server.js / 如何拉起。
+// 未注册、或包内 lib 缺失时返回 null / registered:false，调用方各自降级。
+function autostartDescriptor() {
+  try {
+    return autostartLib ? autostartLib.describeAutostart({ dataDir: dataDir() }) : null;
+  } catch {
+    return null;
+  }
 }
 
 // 包内 CLI 路径：扩展与 CLI 同属一个包（extensions/ 与 bin/ 同级），
@@ -134,10 +155,16 @@ async function serviceUp(port: number): Promise<boolean> {
 
 function startLanbook(port: number): Promise<void> {
   return new Promise((resolve) => {
-    // 首选自启脚本：它带守护循环（崩溃后 3 秒自动重启）
-    const cmd = autostartCmdPath();
-    if (fs.existsSync(cmd)) {
-      exec(`cmd /c start "" "${cmd}"`, { windowsHide: true }, () => resolve());
+    // 首选自启守护：已注册时经服务管理器拉起（win: cmd 守护脚本 / mac: launchctl
+    // kickstart / linux: systemctl start），自带崩溃自愈
+    const d = autostartDescriptor();
+    if (d?.registered && d.launcher) {
+      try {
+        const child = spawn(d.launcher.cmd, d.launcher.args, { detached: true, stdio: "ignore", windowsHide: true });
+        child.on("error", () => {});
+        child.unref();
+      } catch {}
+      resolve();
       return;
     }
     // 未注册自启：用包内 CLI 起（而不是 cwd 下的 server.js——
@@ -380,7 +407,7 @@ async function resolveLinkTarget(
 // ---------------------------------------------------------------- 子命令
 
 // /lanbook autostart —— 一条命令完成「开机自动启动」
-// 链路：注册 Windows 计划任务（登录 + 解锁触发）→ 守护脚本拉起包内 server.js。
+// 注册机制跨平台（Win 计划任务 / macOS launchd / Linux systemd，见 lib/autostart.js 与 ADR-0005）。
 // 自启脚本里的 server.js 绝对路径由包内 CLI 自己写入，扩展不重复拼路径。
 async function cmdAutostart(pi: ExtensionAPI, ctx: any, remove: boolean): Promise<void> {
   if (process.platform !== "win32") {
@@ -415,15 +442,13 @@ async function cmdStatus(pi: ExtensionAPI, ctx: any): Promise<void> {
   lines.push(`服务：${up ? `运行中 http://${host}:${port}` : `未运行（端口 ${port} 无响应）`}`);
   if (up && loopback) lines.push("监听：仅本机（settings.json 的 host 已收敛到回环）");
 
-  const cmdPath = autostartCmdPath();
-  if (fs.existsSync(cmdPath)) {
+  const d = autostartDescriptor();
+  if (d?.registered) {
     // 自启脚本里写死了 server.js 绝对路径；卸载/重装包后可能指向已不存在的副本
-    const m = fs.readFileSync(cmdPath, "utf-8").match(/"([^"]*server\.js)"/);
-    const target = m ? m[1] : null;
-    if (target && fs.existsSync(target)) {
-      lines.push(`自启：已注册，指向 ${target}`);
+    if (d.target && fs.existsSync(d.target)) {
+      lines.push(`自启：已注册（${d.via}），指向 ${d.target}`);
     } else {
-      lines.push(`自启：已注册，但指向的 server.js 不存在 —— ${target || "无法解析"}`);
+      lines.push(`自启：已注册（${d.via}），但指向的 server.js 不存在 —— ${d.target || "无法解析"}`);
       lines.push(`     修复：/lanbook autostart`);
     }
   } else {
@@ -470,7 +495,7 @@ export default function (pi: ExtensionAPI) {
               "| `/lanbook` | 弹出知识库文件选择器 |",
               "| `/lanbook <路径>` | 输出该文件的浏览器链接（局域网内任何设备可打开）|",
               "| `/lanbook <目录>` | 输出知识库首页链接 |",
-              "| `/lanbook autostart` | **注册开机自启**（登录 + 解锁触发，崩溃自动重启）|",
+              "| `/lanbook autostart` | **注册开机自启**（登录自启 + 崩溃自动重启，Win / macOS / Linux）|",
               "| `/lanbook autostart --remove` | 卸载自启 |",
               "| `/lanbook status` | 查看服务与自启状态（排查服务没起来）|",
             ].join("\n"),

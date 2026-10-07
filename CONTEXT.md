@@ -27,5 +27,5 @@ _Avoid_: 全局配置、应用配置
 _Avoid_: 访问地址、局域网地址
 
 **自启任务**:
-`lanbook autostart` 注册的 Windows 计划任务（登录 + 工作站解锁双触发），经数据目录里的 VBS / CMD 包装脚本隐藏拉起服务。包装脚本是带 `:loop` 的守护循环：服务崩溃后 3 秒自动重启，`lanbook stop` 写停止标记让守护退出。1.3 起替代 PM2 守护。
+`lanbook autostart` 注册的登录自启任务，三平台原生机制（见 ADR-0005）：Windows 计划任务（登录 + 解锁触发，数据目录 VBS/CMD 守护循环）、macOS launchd LaunchAgent（KeepAlive 保活）、Linux systemd user 单元（Restart=on-failure）。任务名统一由 LANBOOK_AUTOSTART_TASK 控制。`lanbook stop` 先停守护防复活（win 停止标记 / mac bootout / linux systemctl stop），下次登录自启恢复。1.3 起替代 PM2 守护。
 _Avoid_: PM2、开机服务、守护进程

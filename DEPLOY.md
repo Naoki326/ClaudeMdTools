@@ -27,33 +27,40 @@ lanbook autostart        # 注册登录自启（幂等，重复执行覆盖旧�
 /lanbook status          # 查看服务与自启状态（含自启脚本指向是否有效）
 ```
 
-原理链路：
+原理链路（三平台同一套语义，各自的系统原生机制，详见 ADR-0005）：
 
 ```
-Windows 计划任务 lanbook-autostart（当前用户登录触发，无需管理员）
+Windows  计划任务 lanbook-autostart（登录 + 解锁触发，无需管理员）
   → wscript  <数据目录>/autostart.vbs        （隐藏窗口，无黑框）
-    → cmd      <数据目录>/autostart-task.cmd （stdout/stderr 重定向）
-      → node   <包目录>/server.js             （日志追加到 <数据目录>/logs/service.log）
+    → cmd      <数据目录>/autostart-task.cmd （守护循环：崩溃 3 秒重启；stdout/stderr 重定向）
+      → node   <包目录>/server.js
+
+macOS    launchd LaunchAgent ~/Library/LaunchAgents/lanbook-autostart.plist
+           （RunAtLoad 登录拉起，KeepAlive 崩溃保活，日志直接写 service.log）
+
+Linux    systemd user 单元 ~/.config/systemd/user/lanbook-autostart.service
+           （default.target 登录拉起，Restart=on-failure + RestartSec=3 崩溃重启）
 ```
 
 | 项目 | 值 |
 |------|-----|
-| 任务名 | `lanbook-autostart` |
-| 触发 | 当前用户登录 |
+| 任务名 / Label / 单元 | `lanbook-autostart`（`LANBOOK_AUTOSTART_TASK` 可覆盖） |
+| 触发 | 当前用户登录（Windows 额外含工作站解锁触发；macOS KeepAlive 覆盖唤醒场景） |
 | 端口 / host | 数据目录 `settings.json`（自启场景没有 `PORT` 环境变量，settings 说了算） |
 | 日志 | `~/.lanbook/logs/service.log`（追加写，过大手动清理） |
-| 包装脚本 | `~/.lanbook/autostart.vbs` + `autostart-task.cmd`（注册时生成，`--remove` 时删除） |
+| 注册产物 | Windows: VBS + CMD 包装脚本；macOS: plist；Linux: unit 文件（注册时生成，`--remove` 时删除） |
 
 配套命令：
 
 ```bash
-lanbook stop                        # 停止服务（按端口找进程，CommandLine 验明是 node server.js 才杀）
-lanbook autostart --remove          # 卸载自启（同时删除包装脚本）
-schtasks /Run /TN lanbook-autostart # 手动立即启动一次（验证自启链路）
-schtasks /Query /TN lanbook-autostart  # 查看任务状态
+lanbook stop                        # 停止服务（先停自启守护防复活，再按端口找进程，验明身份后才杀）
+lanbook autostart --remove          # 卸载自启（同时删除注册产物）
+schtasks /Run /TN lanbook-autostart             # Windows：手动立即启动一次
+launchctl kickstart gui/$(id -u)/lanbook-autostart   # macOS：手动立即重启
+systemctl --user restart lanbook-autostart.service   # Linux：手动立即重启
 ```
 
-> 计划任务只负责「登录时拉起」，进程崩溃后不会自动重启（对个人知识库通常够用；服务崩溃后重新登录或 `schtasks /Run` 即可拉起）。需要崩溃自动重启 / 开机即起（无需登录），用 nssm 注册原生服务，见下文。
+> 需要开机即起（无需登录）或系统级服务：Windows 用 nssm 注册原生服务，Linux 用 `loginctl enable-linger` 配合 systemd user 单元，见下文。
 
 ## 从 PM2 迁移（1.2.x → 1.3）
 

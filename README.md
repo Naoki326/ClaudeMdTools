@@ -92,7 +92,7 @@ pi install npm:lanbook
 
 ```
 /lanbook              # 弹出知识库文件选择器，选中即在浏览器打开
-/lanbook autostart    # 注册开机自启（登录 + 解锁触发，崩溃自动重启）
+/lanbook autostart    # 注册开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
 /lanbook status       # 查看服务与自启状态
 ```
 
@@ -121,7 +121,7 @@ lanbook add <目录>          # 添加知识库根目录
 lanbook add --teach <目录>  # 添加课程根目录
 lanbook config             # 打印数据目录与三个配置文件路径（设 $EDITOR 时打开）
 lanbook config port 8090   # 查看 / 设置服务配置（port、host），重启后生效
-lanbook autostart          # 注册开机登录自启（--remove 卸载）
+lanbook autostart          # 注册登录自启（--remove 卸载）
 lanbook stop               # 停止正在运行的服务
 lanbook --version          # 显示版本号（lanbook help 查看完整帮助）
 ```
@@ -148,7 +148,7 @@ pi install npm:lanbook
 /lanbook              # 弹出知识库文件选择器
 /lanbook README.md    # 指定文件，输出可点击链接
 /lanbook ~/docs       # 目录 → 输出知识库首页链接
-/lanbook autostart    # 开启开机自启（登录 + 解锁触发，崩溃自动重启）
+/lanbook autostart    # 开启开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
 /lanbook status       # 查看服务与自启状态（服务没起来时先跑这个）
 /lanbook help         # 列出全部用法
 ```
@@ -235,7 +235,7 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 
 ## 🔁 常驻运行（开机自启）
 
-一条命令注册，之后每次登录 / 解锁工作站自动后台启动服务，进程崩溃后 3 秒自动重启——**不依赖 PM2 或任何外部守护进程**。
+一条命令注册，之后每次登录自动后台启动服务，进程崩溃后自动重启——**不依赖 PM2 或任何外部守护进程**，**Windows / macOS / Linux 通用**（机制映射见 [ADR-0005](docs/adr/0005-cross-platform-autostart.md)）。
 
 ```
 /lanbook autostart        # 用 pi 装的话（推荐）
@@ -245,9 +245,18 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 lanbook autostart         # 装成全局的话
 ```
 
-两种写法等价：都注册同一个 Windows 计划任务，只是自启脚本指向各自安装位置里的 `server.js`。注册是幂等的（重复执行覆盖旧任务）。
+两种写法等价：都注册同一个自启任务（名字默认 `lanbook-autostart`，可用 `LANBOOK_AUTOSTART_TASK` 覆盖），只是自启脚本指向各自安装位置里的 `server.js`。注册是幂等的（重复执行覆盖旧任务；macOS / Linux 注册即启动）。
 
-原理：注册 Windows 计划任务 `lanbook-autostart`（当前用户登录 + 工作站解锁双触发，无需管理员），经 VBS 包装隐藏窗口启动服务；包装脚本是带 `:loop` 的守护循环——服务进程异常退出后 3 秒自动拉起，`lanbook stop` 写入停止标记让守护循环退出（服务不会复活）。stdout/stderr 追加到 `~/.lanbook/logs/service.log`。端口 / 监听地址由数据目录 `settings.json` 决定。
+原理（三平台同一套语义，各自的系统原生机制）：
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| 注册产物 | 计划任务（登录 + 解锁双触发）+ 数据目录 VBS/CMD 守护 | launchd LaunchAgent（KeepAlive 保活） | systemd user 单元（Restart=on-failure） |
+| 崩溃自愈 | `:loop` 守护 3 秒重启 | KeepAlive 立即拉起 | 3 秒后重启（需 systemd >= 240） |
+| `lanbook stop` | 写停止标记防复活 | `launchctl bootout` | `systemctl --user stop` |
+| 下次登录 | 任务再触发 | launchd 再加载 | default.target 再拉起 |
+
+stdout/stderr 统一追加到 `~/.lanbook/logs/service.log`；端口 / 监听地址由数据目录 `settings.json` 决定。stop 均为「本次停下、下次登录自启恢复」。
 
 配套命令：
 
@@ -257,14 +266,16 @@ lanbook autostart         # 装成全局的话
 ```
 
 ```bash
-lanbook stop              # 停止服务（写停止标记 + 按端口找进程，验证身份后才杀）
-lanbook autostart --remove   # 卸载自启
-schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路）
+lanbook stop                  # 停止服务（先停自启守护，再按端口找进程，验证身份后才杀）
+lanbook autostart --remove    # 卸载自启
+schtasks /Run /TN lanbook-autostart        # Windows：手动立即启动一次
+launchctl kickstart gui/$(id -u)/lanbook-autostart   # macOS：手动立即重启
+systemctl --user restart lanbook-autostart.service   # Linux：手动立即重启
 ```
 
-> **自启脚本里写的是绝对路径**：卸载或换装 lanbook 后，路径可能失效，而计划任务仍显示「就绪」——故障要等到下次重启才暴露。`/lanbook status` 会直接报出这种状态并给出修复命令（`/lanbook autostart`）。
+> **自启脚本里写的是绝对路径**：卸载或换装 lanbook 后，路径可能失效，而自启任务仍显示「就绪」——故障要等到下次重启才暴露。`/lanbook status` 会直接报出这种状态并给出修复命令（`/lanbook autostart`）。
 
-> 崩溃自动重启由自带的守护循环提供。若需要「开机即起（无需登录）」或系统级服务，用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
+> 崩溃自动重启由自带的守护机制提供。若需要「开机即起（无需登录）」或系统级服务，Windows 用 nssm 注册原生服务、Linux 用 `systemctl --user` + `loginctl enable-linger`，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
 
 ## 📡 API 参考
 
