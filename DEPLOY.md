@@ -2,17 +2,29 @@
 
 lanbook 是常驻局域网的文档服务。1.3 起内置 `lanbook autostart` 一条命令注册登录自启，**不再依赖 PM2**。
 
-两种运行身份（读写同一数据目录 `~/.lanbook/`）：
+三种运行身份（读写同一数据目录 `~/.lanbook/`）：
 
-- **安装模式（推荐）**——`npm i -g lanbook` 安装
-- **源码模式（开发者）**——git 仓库内运行
+- **pi 安装模式**——`pi install npm:lanbook`，用 `/lanbook autostart` 注册自启
+- **npm 全局安装模式**——`npm i -g lanbook` 安装，用 `lanbook autostart` 注册自启
+- **源码模式（开发者）**——git 仓库内运行，用 `lanbook autostart` 注册自启
 
-两种身份的常驻方式完全相同（见下节），`autostart` 会指向各自身份的 `server.js`。
+三种身份的常驻方式完全相同（见下节），`autostart` 会指向各自身份的 `server.js`——
+即注册时用的是哪份包的 CLI，自启脚本就指向那份包里的服务端。
+
+> **别重复安装**：pi 装的包里已含完整的服务端与 CLI，不需要再 `npm i -g lanbook`。
+> 两份共存时自启脚本只会指向其中一份，卸载那一份就会让任务静默失效。
 
 ## 常驻运行（登录自启）
 
 ```bash
 lanbook autostart        # 注册登录自启（幂等，重复执行覆盖旧任务）
+```
+
+用 pi 装的话用对应的斜杠命令（等价，且不必装全局）：
+
+```
+/lanbook autostart       # 注册登录自启
+/lanbook status          # 查看服务与自启状态（含自启脚本指向是否有效）
 ```
 
 原理链路：
@@ -80,10 +92,18 @@ nssm set lanbook AppEnvironmentExtra LANBOOK_HOME=C:\Users\你的用户名\.lanb
 
 **登录后服务没起来**：
 
+```
+/lanbook status                                     # 用 pi 装的话：先跑这个，会直接指出问题
+```
+
 ```bash
 schtasks /Query /TN lanbook-autostart /V /FO LIST   # 任务是否存在、上次结果
 tail -50 ~/.lanbook/logs/service.log                # 服务自己的输出（崩溃原因在这里）
 ```
+
+先看 `autostart-task.cmd` 里写死的 `server.js` 路径是否还存在——卸载或换装
+lanbook 后该路径会失效，而计划任务仍显示「就绪」，故障要等到下次重启才暴露。
+`/lanbook status` 会直接报出这种状态；修复只需重跑 `/lanbook autostart`（或 `lanbook autostart`）。
 
 **端口被占**：
 

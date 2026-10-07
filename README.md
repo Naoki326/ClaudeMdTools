@@ -76,9 +76,29 @@ GET /kb/weldone/openspec/...md   # 直接拿到 markdown 原文
 
 在项目的 `CLAUDE.md` / `AGENTS.md` 里加一行指向 `http://localhost:8080/kb`，Claude Code 等工具即可自行检索知识库——无需 JSON 解析、无需参数。
 
+用 pi 的话还有更直接的方式：`pi install npm:lanbook` 后，`/lanbook <文件>` 直接产出可点击的渲染链接，`/lanbook autostart` 让服务常驻。
+
 ## 🚀 快速开始
 
-**npm 全局安装（推荐）**——两条命令开始阅读：
+两种装法，**选一种就行**——它们装的是同一个包，只是放在不同地方：
+
+**① 用 pi 的话（推荐）**——一条命令，附带 `/lanbook` 命令与开机自启：
+
+```bash
+pi install npm:lanbook
+```
+
+然后在 pi 里：
+
+```
+/lanbook              # 弹出知识库文件选择器，选中即在浏览器打开
+/lanbook autostart    # 注册开机自启（登录 + 解锁触发，崩溃自动重启）
+/lanbook status       # 查看服务与自启状态
+```
+
+pi 装的这份包里就带着完整的服务端与 CLI，**不需要再 `npm i -g lanbook`**。详见[在 pi 里用 /lanbook](#在-pi-里用-lanbook)。
+
+**② 不用 pi 的话**——装成全局命令：
 
 ```bash
 npm i -g lanbook
@@ -92,6 +112,8 @@ lanbook
 
 ### 命令行
 
+以下命令需要装成全局（上面第 ② 种）。**用 pi 装的话不必装全局**——对应的 `/lanbook` 斜杠命令已经能做同样的事：
+
 ```bash
 lanbook                    # 启动服务（默认行为）
 lanbook open               # 服务未运行时后台启动，并打开浏览器
@@ -104,13 +126,19 @@ lanbook stop               # 停止正在运行的服务
 lanbook --version          # 显示版本号（lanbook help 查看完整帮助）
 ```
 
+| 要做的事 | 装成全局 | 用 pi |
+|---|---|---|
+| 开机自启 | `lanbook autostart` | `/lanbook autostart` |
+| 添加根目录 | `lanbook add <目录>` | `/lanbook <目录>` 或网页 ⚙ |
+| 看服务状态 | — | `/lanbook status` |
+
 ### 端口与监听地址
 
 端口默认 8080。改端口：`lanbook config port 8090`；仅本机访问：`lanbook config host 127.0.0.1`（`lanbook config <key>` 可查看当前生效值与来源）。两者写入数据目录 `settings.json`，重启生效；临时改端口也可用环境变量 `PORT=8090 lanbook`。
 
-### 在 pi 里用 /lanbook 生成链接
+### 在 pi 里用 /lanbook
 
-包内自带 pi 扩展，装上后多一条 `/lanbook` 命令：选中的 Markdown / HTML 直接在浏览器（手机也行）打开。
+包内自带 pi 扩展，装上后多一条 `/lanbook` 命令——既能生成浏览器链接，也能管理服务自启。
 
 ```bash
 pi install npm:lanbook
@@ -207,21 +235,34 @@ lanbook 默认监听 `0.0.0.0`，且**没有鉴权**。这意味着：
 
 ## 🔁 常驻运行（开机自启）
 
-一条命令注册，之后每次登录 / 解锁工作站自动后台启动服务，进程崩溃后 3 秒自动重启——**不依赖 PM2 或任何外部守护进程**：
+一条命令注册，之后每次登录 / 解锁工作站自动后台启动服务，进程崩溃后 3 秒自动重启——**不依赖 PM2 或任何外部守护进程**。
+
+```
+/lanbook autostart        # 用 pi 装的话（推荐）
+```
 
 ```bash
-lanbook autostart         # 注册自启（登录 + 解锁触发，崩溃自动重启，幂等覆盖旧任务）
+lanbook autostart         # 装成全局的话
 ```
+
+两种写法等价：都注册同一个 Windows 计划任务，只是自启脚本指向各自安装位置里的 `server.js`。注册是幂等的（重复执行覆盖旧任务）。
 
 原理：注册 Windows 计划任务 `lanbook-autostart`（当前用户登录 + 工作站解锁双触发，无需管理员），经 VBS 包装隐藏窗口启动服务；包装脚本是带 `:loop` 的守护循环——服务进程异常退出后 3 秒自动拉起，`lanbook stop` 写入停止标记让守护循环退出（服务不会复活）。stdout/stderr 追加到 `~/.lanbook/logs/service.log`。端口 / 监听地址由数据目录 `settings.json` 决定。
 
 配套命令：
+
+```
+/lanbook status              # 查看服务与自启状态（含自启脚本指向是否有效）
+/lanbook autostart --remove  # 卸载自启
+```
 
 ```bash
 lanbook stop              # 停止服务（写停止标记 + 按端口找进程，验证身份后才杀）
 lanbook autostart --remove   # 卸载自启
 schtasks /Run /TN lanbook-autostart   # 手动立即启动一次（验证链路）
 ```
+
+> **自启脚本里写的是绝对路径**：卸载或换装 lanbook 后，路径可能失效，而计划任务仍显示「就绪」——故障要等到下次重启才暴露。`/lanbook status` 会直接报出这种状态并给出修复命令（`/lanbook autostart`）。
 
 > 崩溃自动重启由自带的守护循环提供。若需要「开机即起（无需登录）」或系统级服务，用 nssm 注册原生 Windows 服务，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
 
