@@ -410,10 +410,6 @@ async function resolveLinkTarget(
 // 注册机制跨平台（Win 计划任务 / macOS launchd / Linux systemd，见 lib/autostart.js 与 ADR-0005）。
 // 自启脚本里的 server.js 绝对路径由包内 CLI 自己写入，扩展不重复拼路径。
 async function cmdAutostart(pi: ExtensionAPI, ctx: any, remove: boolean): Promise<void> {
-  if (process.platform !== "win32") {
-    ctx.ui.notify("autostart 目前仅支持 Windows；macOS 用 launchd，Linux 用 systemd user 单元", "warning");
-    return;
-  }
   const { code, out, err } = await runCli(remove ? ["autostart", "--remove"] : ["autostart"]);
   const text = (out + err).trim();
   if (code !== 0) {
