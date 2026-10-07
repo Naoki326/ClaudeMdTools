@@ -31,7 +31,10 @@ const HELP = `${USAGE}
   host     监听地址（默认 0.0.0.0；仅本机访问设为 127.0.0.1）
 
 环境变量:
-  PORT                    一次性覆盖端口（优先级高于 settings.json）
+  PORT                    一次性覆盖端口（优先级高于 settings.json）。仅直接启动
+                          （lanbook / node server.js）时生效；open / stop / config
+                          与自启服务只认 settings.json——宿主环境残留的 PORT
+                          （如 pi-web 自己的端口）不代表 lanbook 的服务端口
   EDITOR                  lanbook config 打开的编辑器（如 "code -w"）
   BROWSER                 lanbook open 打开的浏览器（设为 none 则不打开）
   LANBOOK_HOME            数据目录位置（默认 ~/.lanbook）
@@ -138,12 +141,12 @@ async function cmdConfig(args) {
     let stored;
     try { stored = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch { stored = {}; }
 
-    // 查询：生效值 + 来源标注（优先级与 resolveListen 一致）
+    // 查询：生效值 + 来源标注。按「服务视角」只认 settings.json（env 传 {}）：
+    // 进程环境里的 PORT 常属于宿主（pi / pi-web 等），对 open/stop/自启服务不生效
     if (args.length === 1) {
-      const effective = resolveListen(dataDir);
+      const effective = resolveListen(dataDir, {});
       if (key === 'port') {
-        const source = parsePort(process.env.PORT) != null ? '环境变量 PORT'
-          : parsePort(stored.port) != null ? 'settings.json' : '内置默认';
+        const source = parsePort(stored.port) != null ? 'settings.json' : '内置默认';
         console.log(`port = ${effective.port}（来源: ${source}）`);
       } else {
         const source = parseHost(stored.host) != null ? 'settings.json' : '内置默认';
@@ -153,7 +156,7 @@ async function cmdConfig(args) {
     }
 
     // 写入：先记写入前的生效端口（运行中服务用的端口），写完后探测给重启提示
-    const before = resolveListen(dataDir);
+    const before = resolveListen(dataDir, {});
     const parsed = spec.parse(value);
     if (parsed == null) fail(spec.invalid(value));
     stored[key] = parsed;
@@ -226,17 +229,22 @@ function openBrowser(url) {
 // 然后打开浏览器。端口解析与服务端同源：PORT 环境变量 > settings > 默认 8080。
 async function cmdOpen() {
   const dataDir = resolveDataDir();
-  const { port } = resolveListen(dataDir);
+  // 只认 settings.json（与自启守护 / pi 扩展一致，同 link-host.js 的教训）：
+  // 宿主环境残留的 PORT（如 pi-web 自己的 30141）会把别的服务误判成
+  // lanbook「已在运行」，或把服务起在错误端口上
+  const { port } = resolveListen(dataDir, {});
   const url = `http://127.0.0.1:${port}/`;
 
   if (await isUp(url)) {
     console.log(`服务已在运行: ${url}`);
   } else {
     console.log(`服务未运行，正在后台启动...`);
+    const childEnv = { ...process.env };
+    delete childEnv.PORT; // 服务绑 settings.json 的端口，与上面探测保持一致
     const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
       detached: true,
       stdio: 'ignore',
-      env: process.env,
+      env: childEnv,
       windowsHide: true,
     });
     child.unref();
@@ -332,7 +340,9 @@ function findListeningPids(port) {
 // 全局规则：终止前验明身份——Windows 下用 CommandLine 确认是 node 跑的 server.js 才杀。
 function cmdStop() {
   const dataDir = resolveDataDir();
-  const { port } = resolveListen(dataDir);
+  // 服务视角端口：只认 settings.json（宿主环境的 PORT 与 lanbook 服务无关，
+  // 拿它找监听进程会扫到别的服务头上）
+  const { port } = resolveListen(dataDir, {});
   // 先停自启守护、防复活（win 写停止标记；mac launchd bootout、linux systemctl stop
   // 会直接停掉托管的服务进程），再扫端口兜底处理手动启动的实例
   const guard = stopAutostartGuard({ dataDir });
