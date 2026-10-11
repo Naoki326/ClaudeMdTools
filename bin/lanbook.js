@@ -11,7 +11,7 @@ const os = require('os');
 const { spawn, spawnSync } = require('node:child_process');
 const { resolveDataDir, initDataDir } = require('../lib/data-dir');
 const { SETTINGS_FILE_NAME, resolveListen, parsePort, parseHost } = require('../lib/settings');
-const { registerAutostart, removeAutostart, stopAutostartGuard } = require('../lib/autostart');
+const { registerAutostart, removeAutostart, stopAutostartGuard, pruneOrphanAutostart } = require('../lib/autostart');
 
 const USAGE = `用法: lanbook [命令] [参数]
 
@@ -20,6 +20,7 @@ const USAGE = `用法: lanbook [命令] [参数]
   add [--teach] <目录>    添加根目录（默认知识库；--teach 添加课程根目录）
   config [key] [value]    无参数打印配置文件路径；带参数查看/设置 port、host
   autostart [--remove]    注册登录自启（Win 计划任务 / macOS launchd / Linux systemd）；--remove 卸载
+  autostart --prune       清理残留自启任务（指向已删除脚本的孤儿计划任务）
   stop                    停止正在运行的服务
   version                 显示版本号
   help                    显示详细帮助`;
@@ -269,10 +270,36 @@ async function cmdOpen() {
 // 这里只做参数解析与平台化输出。
 function cmdAutostart(args) {
   const remove = args.includes('--remove');
-  const extra = args.filter(a => a !== '--remove');
+  const prune = args.includes('--prune');
+  if (remove && prune) fail(`--remove 与 --prune 不能同时使用\n\n${USAGE}`);
+  const extra = args.filter(a => a !== '--remove' && a !== '--prune');
   if (extra.length) fail(`多余参数: ${extra.join(' ')}\n\n${USAGE}`);
 
   const dataDir = resolveDataDir();
+
+  // 清理残留自启任务：指向已删除脚本的孤儿计划任务（典型症状：登录/解锁弹
+  // 「无法找到脚本文件 ...\autostart.vbs」）。注册流程也会自动做一次。
+  if (prune) {
+    let pruned;
+    try {
+      pruned = pruneOrphanAutostart({ dataDir });
+    } catch (err) {
+      fail(err && err.message ? err.message : String(err));
+    }
+    if (!pruned.supported) {
+      console.log('当前平台无此类残留（残留清理仅适用于 Windows 计划任务）');
+      return;
+    }
+    if (!pruned.pruned.length) {
+      console.log('未发现残留自启任务');
+      return;
+    }
+    for (const p of pruned.pruned) {
+      console.log(`已清理残留计划任务: ${p.name}（目标脚本已不存在：${p.target || '未识别路径'}）`);
+    }
+    return;
+  }
+
   let result;
   try {
     result = remove

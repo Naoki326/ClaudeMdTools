@@ -268,12 +268,24 @@ stdout/stderr 统一追加到 `~/.lanbook/logs/service.log`；端口 / 监听地
 ```bash
 lanbook stop                  # 停止服务（先停自启守护，再按端口找进程，验证身份后才杀）
 lanbook autostart --remove    # 卸载自启
+lanbook autostart --prune     # 清理残留自启任务（见下）
 schtasks /Run /TN lanbook-autostart        # Windows：手动立即启动一次
 launchctl kickstart gui/$(id -u)/lanbook-autostart   # macOS：手动立即重启
 systemctl --user restart lanbook-autostart.service   # Linux：手动立即重启
 ```
 
 > **自启脚本里写的是绝对路径**：卸载或换装 lanbook 后，路径可能失效，而自启任务仍显示「就绪」——故障要等到下次重启才暴露。`/lanbook status` 会直接报出这种状态并给出修复命令（`/lanbook autostart`）。
+
+### 残留自启任务（Windows）
+
+Windows 的注册产物分两半：系统侧的计划任务 + 数据目录侧的 `autostart.vbs`。如果**数据目录先被删掉而任务还留着**（Temp 被清理、`LANBOOK_HOME` 换位置、测试临时目录回收），就得到一个「每次登录 / 解锁都弹『无法找到脚本文件』」的孤儿任务：
+
+```
+Windows Script Host
+  无法找到脚本文件 "C:\Users\...\AppData\Local\Temp\old-check\autostart.vbs"
+```
+
+`lanbook autostart` **注册时会自动清理**这类残留；也可手动执行 `lanbook autostart --prune` 单独清理。认领规则是双签名 + 目标已失效——任务描述含 `managed by lanbook`（新注册写入），或动作是 `wscript` 拉起 `autostart.vbs`（历史任务），**且**目标脚本确实不存在。目标健在的任务一律不动。
 
 > 崩溃自动重启由自带的守护机制提供。若需要「开机即起（无需登录）」或系统级服务，Windows 用 nssm 注册原生服务、Linux 用 `systemctl --user` + `loginctl enable-linger`，见 [DEPLOY.md](https://github.com/Naoki326/ClaudeMdTools/blob/master/DEPLOY.md)。
 

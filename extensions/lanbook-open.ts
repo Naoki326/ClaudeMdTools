@@ -409,8 +409,9 @@ async function resolveLinkTarget(
 // /lanbook autostart —— 一条命令完成「开机自动启动」
 // 注册机制跨平台（Win 计划任务 / macOS launchd / Linux systemd，见 lib/autostart.js 与 ADR-0005）。
 // 自启脚本里的 server.js 绝对路径由包内 CLI 自己写入，扩展不重复拼路径。
-async function cmdAutostart(pi: ExtensionAPI, ctx: any, remove: boolean): Promise<void> {
-  const { code, out, err } = await runCli(remove ? ["autostart", "--remove"] : ["autostart"]);
+async function cmdAutostart(pi: ExtensionAPI, ctx: any, mode: "register" | "remove" | "prune"): Promise<void> {
+  const args = mode === "remove" ? ["autostart", "--remove"] : mode === "prune" ? ["autostart", "--prune"] : ["autostart"];
+  const { code, out, err } = await runCli(args);
   const text = (out + err).trim();
   if (code !== 0) {
     ctx.ui.notify(`autostart 失败：${text || "未知错误"}`, "error");
@@ -418,15 +419,19 @@ async function cmdAutostart(pi: ExtensionAPI, ctx: any, remove: boolean): Promis
   }
   // CLI 输出多行说明，取有信息量的首行作为通知，完整内容随消息落盘
   const firstLine = text.split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+  const title = mode === "remove" ? "已卸载" : mode === "prune" ? "残留清理" : "已注册";
   await pi.sendMessage(
     {
       customType: "lanbook-autostart",
-      content: `${remove ? "已卸载" : "已注册"} lanbook 开机自启\n\n\`\`\`\n${text}\n\`\`\``,
+      content: `${title} lanbook 开机自启\n\n\`\`\`\n${text}\n\`\`\``,
       display: true,
     },
     { deliverAs: "nextTurn" },
   );
-  ctx.ui.notify(remove ? "已卸载自启" : `已注册自启：${firstLine}`, "info");
+  ctx.ui.notify(
+    mode === "remove" ? "已卸载自启" : mode === "prune" ? firstLine || "残留清理完成" : `已注册自启：${firstLine}`,
+    "info",
+  );
 }
 
 // /lanbook status —— 看服务是否在跑、跑的是哪份代码、自启是否已注册
@@ -465,14 +470,15 @@ async function cmdStatus(pi: ExtensionAPI, ctx: any): Promise<void> {
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("lanbook", {
     description:
-      "lanbook 知识库：链接文件到浏览器 / 开启开机自启。用法: /lanbook [路径] | autostart [--remove] | status",
+      "lanbook 知识库：链接文件到浏览器 / 开启开机自启。用法: /lanbook [路径] | autostart [--remove|--prune] | status",
     handler: async (args, ctx) => {
       const trimmed = (args || "").trim();
 
       // 子命令优先：这些不需要服务先跑起来
       const [sub, ...rest] = trimmed.split(/\s+/);
       if (sub === "autostart") {
-        await cmdAutostart(pi, ctx, rest.includes("--remove"));
+        const mode = rest.includes("--remove") ? "remove" : rest.includes("--prune") ? "prune" : "register";
+        await cmdAutostart(pi, ctx, mode);
         return;
       }
       if (sub === "status") {
@@ -493,6 +499,7 @@ export default function (pi: ExtensionAPI) {
               "| `/lanbook <目录>` | 输出知识库首页链接 |",
               "| `/lanbook autostart` | **注册开机自启**（登录自启 + 崩溃自动重启，Win / macOS / Linux）|",
               "| `/lanbook autostart --remove` | 卸载自启 |",
+              "| `/lanbook autostart --prune` | 清理残留自启任务（指向已删脚本的孤儿计划任务）|",
               "| `/lanbook status` | 查看服务与自启状态（排查服务没起来）|",
             ].join("\n"),
             display: true,

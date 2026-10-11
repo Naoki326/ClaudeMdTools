@@ -28,4 +28,7 @@ _Avoid_: 访问地址、局域网地址
 
 **自启任务**:
 `lanbook autostart` 注册的登录自启任务，三平台原生机制（见 ADR-0005）：Windows 计划任务（登录 + 解锁触发，数据目录 VBS/CMD 守护循环）、macOS launchd LaunchAgent（KeepAlive 保活）、Linux systemd user 单元（Restart=on-failure）。任务名统一由 LANBOOK_AUTOSTART_TASK 控制。`lanbook stop` 先停守护防复活（win 停止标记 / mac bootout / linux systemctl stop），下次登录自启恢复。1.3 起替代 PM2 守护。
+
+**残留自启任务（孤儿任务）**:
+Windows 特有：注册产物分居两处（系统侧计划任务 + 数据目录侧 autostart.vbs），数据目录先消失而任务留着时，每次登录 / 解锁弹「无法找到脚本文件」。`lanbook autostart` 注册时自动清理（认领规则：描述含 managed by lanbook，或 wscript 拉起 autostart.vbs；且目标脚本已不存在），也可 `lanbook autostart --prune` 单独清理。macOS / Linux 单产物，无此概念。
 _Avoid_: PM2、开机服务、守护进程

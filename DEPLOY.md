@@ -55,10 +55,17 @@ Linux    systemd user 单元 ~/.config/systemd/user/lanbook-autostart.service
 ```bash
 lanbook stop                        # 停止服务（先停自启守护防复活，再按端口找进程，验明身份后才杀）
 lanbook autostart --remove          # 卸载自启（同时删除注册产物）
+lanbook autostart --prune           # 清理残留自启任务（指向已删除脚本的孤儿任务）
 schtasks /Run /TN lanbook-autostart             # Windows：手动立即启动一次
 launchctl kickstart gui/$(id -u)/lanbook-autostart   # macOS：手动立即重启
 systemctl --user restart lanbook-autostart.service   # Linux：手动立即重启
 ```
+
+### 残留自启任务（孤儿计划任务）
+
+Windows 注册产物分两半：系统侧计划任务 + 数据目录 `autostart.vbs`。**数据目录先被删而任务还留着**（Temp 被清理、`LANBOOK_HOME` 换位置）时，每次登录 / 解锁都会弹「无法找到脚本文件 ...\autostart.vbs」。
+
+`lanbook autostart` 注册时自动清理这类残留，也可 `lanbook autostart --prune` 单独清理。认领规则：任务描述含 `managed by lanbook`，或动作是 `wscript` 拉起 `autostart.vbs`（历史任务无描述）——且目标脚本确实不存在；目标健在的任务不动。
 
 > 需要开机即起（无需登录）或系统级服务：Windows 用 nssm 注册原生服务，Linux 用 `loginctl enable-linger` 配合 systemd user 单元，见下文。
 

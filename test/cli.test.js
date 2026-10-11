@@ -313,10 +313,14 @@ test('lanbook open：服务已运行时不重复启动，直接打开浏览器',
 
 test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows）', { skip: process.platform !== 'win32' }, async t => {
   const { installDir, dataDir } = setup(t, 'lanbook-cli-autostart-');
+  // 任务名带固定前缀，便于注册时自清残留 / 手工排查（见下方 t.after 说明）
   const taskName = `lanbook-test-${Date.now().toString(36)}`;
   const env = { LANBOOK_HOME: dataDir, LANBOOK_AUTOSTART_TASK: taskName };
   t.after(() => {
-    // 兜底清理：测试中途断言失败也不在系统里留任务
+    // 兜底清理：测试中途断言失败也不在系统里留任务。
+    // 注意：t.after 在进程被强杀（Ctrl+C / 超时 / 会话中断）时不会执行，
+    // 这正是历史上遗留 old-check-1 孤儿任务的成因——真正的兜底是
+    // lib/autostart.js 的注册时自动清理（pruneOrphanAutostart）。
     try { spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true }); } catch {}
   });
 

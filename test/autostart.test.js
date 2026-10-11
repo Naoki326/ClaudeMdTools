@@ -11,6 +11,12 @@ const path = require('node:path');
 const os = require('node:os');
 const {
   autostartTaskName,
+  TASK_MARKER,
+  extractScriptPath,
+  isLanbookWrapperAction,
+  selectOrphanTasks,
+  parseTaskList,
+  pruneOrphanAutostart,
   generateLaunchdPlist,
   generateSystemdUnit,
   launchdPlistPath,
@@ -183,9 +189,9 @@ test('registerAutostart(win32)：生成 vbs/cmd 守护包装 + PowerShell 注册
   assert.ok(cmdContent.includes(SERVER_JS), '守护脚本应写 server.js 绝对路径');
   assert.ok(cmdContent.includes('.service-stopped'), '守护脚本应检测停止标记（lanbook stop 防复活）');
 
-  const ps = run.calls.find(c => c.cmd === 'powershell.exe');
+  const ps = run.calls.find(c => c.cmd === 'powershell.exe' && c.args[3].includes('Register-ScheduledTask'));
   assert.ok(ps, '应经 powershell 注册计划任务');
-  assert.ok(ps.args[3].includes('Register-ScheduledTask'), 'PS 脚本应含 Register-ScheduledTask');
+  assert.ok(ps.args[3].includes(TASK_MARKER), 'PS 脚本应写入自启标识描述（供残留清理认领）');
   assert.ok(sawCall(run, 'schtasks', '/Query', '/TN', 'lanbook-autostart'), '注册后应查询校验');
 });
 
@@ -304,6 +310,133 @@ test('describeAutostart：三平台从注册产物提取 server.js 指向与拉�
 
   // 未注册：产物文件不存在 → registered:false（用独立 homeDir，避免上面的 plist 干扰）
   assert.equal(describeAutostart({ dataDir: path.join(base, 'none'), platform: 'darwin', homeDir: path.join(base, 'home2') }).registered, false);
+});
+
+// ---------- 残留自启任务清理 ----------
+// 背景：注册产物分两半（系统侧计划任务 + 数据目录侧 autostart.vbs）。数据目录被删而
+// 任务留着 → 每次登录/解锁弹「无法找到脚本文件」。测试进程被强杀时 t.after 不执行，
+// 正是孤儿任务的主要来源（实测曾遗留 old-check-1）。
+
+test('extractScriptPath：从动作参数里取脚本绝对路径', () => {
+  assert.equal(extractScriptPath('"C:\\Users\\u\\AppData\\Local\\Temp\\old-check\\autostart.vbs"'), 'C:\\Users\\u\\AppData\\Local\\Temp\\old-check\\autostart.vbs');
+  assert.equal(extractScriptPath('C:\\x\\autostart.vbs'), 'C:\\x\\autostart.vbs');
+  assert.equal(extractScriptPath('/c wscript foo'), '/c', '无引号时取第一个词');
+  assert.equal(extractScriptPath(''), null);
+  assert.equal(extractScriptPath(null), null);
+});
+
+test('isLanbookWrapperAction：仅认 wscript 拉起 autostart.vbs 的动作', () => {
+  assert.equal(isLanbookWrapperAction('wscript.exe', '"C:\\x\\autostart.vbs"'), true);
+  assert.equal(isLanbookWrapperAction('wscript', '"C:\\x\\autostart.vbs"'), true);
+  assert.equal(isLanbookWrapperAction('"C:\\Windows\\System32\\wscript.exe"', '"C:\\x\\autostart.vbs"'), true);
+  assert.equal(isLanbookWrapperAction('wscript.exe', '"C:\\x\\other.vbs"'), false, '别的 vbs 不是 lanbook 的');
+  assert.equal(isLanbookWrapperAction('node.exe', '"C:\\x\\autostart.vbs"'), false, '非 wscript 不算');
+  assert.equal(isLanbookWrapperAction('wscript.exe', null), false);
+});
+
+test('selectOrphanTasks：只挑「自己签名的 + 目标已不存在」的任务', () => {
+  const tasks = [
+    // 描述签名 + 脚本已不存在 → 孤儿
+    { name: 'old-check-1', exec: 'wscript.exe', args: '"C:\\Temp\\old-check\\autostart.vbs"', desc: `x ${TASK_MARKER} y` },
+    // 动作签名（历史任务无描述）+ 脚本已不存在 → 孤儿
+    { name: 'old-check-2', exec: 'wscript.exe', args: '"C:\\Temp\\old-check2\\autostart.vbs"', desc: null },
+    // 描述签名但目标健在 → 不清理
+    { name: 'lanbook-autostart', exec: 'wscript.exe', args: '"C:\\Users\\u\\.lanbook\\autostart.vbs"', desc: TASK_MARKER },
+    // 当前正在注册的任务名 → 一律跳过（即使目标不存在）
+    { name: 'being-registered', exec: 'wscript.exe', args: '"C:\\nope\\autostart.vbs"', desc: TASK_MARKER },
+    // 完全无关的任务 → 不碰
+    { name: 'Hermes_Gateway', exec: 'wscript.exe', args: '"C:\\hermes\\Hermes_Gateway.vbs"', desc: null },
+    { name: 'OneDrive', exec: '%localappdata%\\OneDrive\\x.exe', args: '/reporting', desc: null },
+  ];
+  const exists = p => p === 'C:\\Users\\u\\.lanbook\\autostart.vbs';
+  const orphans = selectOrphanTasks(tasks, { currentTaskName: 'being-registered', exists });
+  assert.deepEqual(orphans.map(o => o.name).sort(), ['old-check-1', 'old-check-2']);
+  assert.equal(orphans.find(o => o.name === 'old-check-1').via, 'marker');
+  assert.equal(orphans.find(o => o.name === 'old-check-2').via, 'signature');
+});
+
+test('selectOrphanTasks：动作签名但目标路径无法识别时也清理（坏任务）', () => {
+  const tasks = [{ name: 'broken', exec: 'wscript.exe', args: null, desc: TASK_MARKER }];
+  const orphans = selectOrphanTasks(tasks, { currentTaskName: 'x', exists: () => true });
+  assert.deepEqual(orphans.map(o => o.name), ['broken']);
+  assert.equal(orphans[0].target, null);
+});
+
+test('parseTaskList：空输出 → []，单任务对象 → 单元素数组', () => {
+  assert.deepEqual(parseTaskList(''), []);
+  assert.deepEqual(parseTaskList('  \n '), []);
+  assert.deepEqual(parseTaskList('{"name":"a"}'), [{ name: 'a' }], 'ConvertTo-Json 单条输出对象而非数组');
+  assert.deepEqual(parseTaskList('[{"name":"a"},{"name":"b"}]').length, 2);
+});
+
+test('pruneOrphanAutostart(win32)：枚举 → 删孤儿任务；保留健在任务', () => {
+  const liveVbs = 'C:\\Users\\u\\.lanbook\\autostart.vbs';
+  const tasksJson = JSON.stringify([
+    { name: 'old-check-1', exec: 'wscript.exe', args: '"C:\\Temp\\old-check\\autostart.vbs"', desc: TASK_MARKER },
+    { name: 'lanbook-autostart', exec: 'wscript.exe', args: `"${liveVbs}"`, desc: TASK_MARKER },
+  ]);
+  const run = fakeRun([
+    [(cmd, args) => cmd === 'powershell.exe' && args[3].includes('Get-ScheduledTask'), { status: 0, stdout: tasksJson, stderr: '' }],
+  ]);
+  const res = pruneOrphanAutostart({ platform: 'win32', run, currentTaskName: 'lanbook-autostart', exists: p => p === liveVbs });
+  assert.equal(res.supported, true);
+  assert.deepEqual(res.pruned.map(p => p.name), ['old-check-1']);
+  assert.ok(sawCall(run, 'schtasks', '/Delete', '/TN', 'old-check-1', '/F'), '应删除孤儿任务');
+  assert.ok(!sawCall(run, 'schtasks', '/Delete', '/TN', 'lanbook-autostart', '/F'), '健在任务不得删除');
+});
+
+test('pruneOrphanAutostart(win32)：删除失败不误报已清理', () => {
+  const tasksJson = JSON.stringify([{ name: 'old-check-1', exec: 'wscript.exe', args: '"C:\\Temp\\x\\autostart.vbs"', desc: TASK_MARKER }]);
+  const run = fakeRun([
+    [(cmd, args) => cmd === 'powershell.exe' && args[3].includes('Get-ScheduledTask'), { status: 0, stdout: tasksJson, stderr: '' }],
+    [(cmd, args) => cmd === 'schtasks' && args[0] === '/Delete', { status: 1, stdout: '', stderr: '拒绝访问。' }],
+  ]);
+  const res = pruneOrphanAutostart({ platform: 'win32', run, currentTaskName: 'lanbook-autostart', exists: () => false });
+  assert.deepEqual(res.pruned, [], '删除失败时不应报告已清理');
+});
+
+test('pruneOrphanAutostart：非 Windows 平台 supported:false（无此类残留）', () => {
+  for (const platform of ['darwin', 'linux']) {
+    const run = fakeRun();
+    const res = pruneOrphanAutostart({ platform, run });
+    assert.equal(res.supported, false);
+    assert.deepEqual(res.pruned, []);
+    assert.equal(run.calls.length, 0, '非 win32 不应调任何系统命令');
+  }
+});
+
+test('pruneOrphanAutostart：枚举命令失败时抛错（调用方决定是否阻断）', () => {
+  const run = fakeRun([
+    [(cmd, args) => cmd === 'powershell.exe' && args[3].includes('Get-ScheduledTask'), { status: 1, stdout: '', stderr: '拒绝访问。' }],
+  ]);
+  assert.throws(() => pruneOrphanAutostart({ platform: 'win32', run, currentTaskName: 'x' }), /枚举计划任务失败.*拒绝访问/s);
+});
+
+test('registerAutostart(win32)：注册前自动清理残留并写入结果 notes', () => {
+  const base = mkTempDir('lanbook-as-prune-');
+  t_cleanup(base);
+  const dataDir = path.join(base, 'data');
+  const tasksJson = JSON.stringify([
+    { name: 'old-check-1', exec: 'wscript.exe', args: '"C:\\Temp\\old-check\\autostart.vbs"', desc: TASK_MARKER },
+  ]);
+  const run = fakeRun([
+    [(cmd, args) => cmd === 'powershell.exe' && args[3].includes('Get-ScheduledTask'), { status: 0, stdout: tasksJson, stderr: '' }],
+  ]);
+  const result = registerAutostart({ dataDir, serverJs: SERVER_JS, platform: 'win32', run });
+  assert.ok(sawCall(run, 'schtasks', '/Delete', '/TN', 'old-check-1', '/F'), '注册应顺带清掉残留');
+  assert.ok(result.notes.some(n => n.includes('old-check-1')), 'notes 应回报清理结果');
+});
+
+test('registerAutostart(win32)：残留清理失败不阻断注册', () => {
+  const base = mkTempDir('lanbook-as-prune-fail-');
+  t_cleanup(base);
+  const dataDir = path.join(base, 'data');
+  const run = fakeRun([
+    [(cmd, args) => cmd === 'powershell.exe' && args[3].includes('Get-ScheduledTask'), { status: 1, stdout: '', stderr: '拒绝访问。' }],
+  ]);
+  const result = registerAutostart({ dataDir, serverJs: SERVER_JS, platform: 'win32', run });
+  assert.equal(result.kind, 'windows');
+  assert.ok(result.notes.some(n => n.includes('清理残留任务失败')), 'notes 应说明清理失败但不阻断');
 });
 
 // ---------- 任务名 ----------

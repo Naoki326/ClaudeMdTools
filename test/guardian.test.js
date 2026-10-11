@@ -139,3 +139,63 @@ test('autostart --remove 清理待命标记（重新注册不留残留状态）'
   assert.ok(!fs.existsSync(busyFlag), '--remove 应一并删除待命标记');
   assert.ok(!fs.existsSync(g.cmdPath), '--remove 应删除守护脚本');
 });
+
+test('autostart --prune：数据目录被删后清掉孤儿任务（登录弹「无法找到脚本文件」的根因）', async t => {
+  if (process.platform !== 'win32') return t.skip('仅 Windows');
+  const port = await freePort();
+  const g = makeGuardianScript(port);
+
+  // makeGuardianScript 注册后已删任务，重新注册一个并保留（模拟真实安装）
+  const taskName = `lanbook-prune-${process.pid}-${Date.now()}`;
+  const env = { ...process.env, LANBOOK_HOME: g.dataDir, LANBOOK_AUTOSTART_TASK: taskName };
+  const cli = path.join(REPO_ROOT, 'bin', 'lanbook.js');
+  const reg = spawnSync(process.execPath, [cli, 'autostart'], { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
+  assert.equal(reg.status, 0, `注册应成功\n${reg.stderr}`);
+  t.after(() => {
+    spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { encoding: 'utf-8', windowsHide: true });
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  const q0 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf-8', windowsHide: true });
+  assert.equal(q0.status, 0, '任务应已注册');
+
+  // 制造故障：删掉整个数据目录（autostart.vbs 随之消失），任务留着 → 孤儿
+  fs.rmSync(g.dataDir, { recursive: true, force: true });
+  assert.ok(!fs.existsSync(path.join(g.dataDir, 'autostart.vbs')), '包装脚本应已消失（故障现场）');
+
+  // --prune 应认领并清掉它（此时描述含 marker，且目标已不存在）
+  const r = spawnSync(process.execPath, [cli, 'autostart', '--prune'], { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
+  assert.equal(r.status, 0, `--prune 应成功退出\n${r.stderr}`);
+  assert.ok(r.stdout.includes(taskName), `--prune 输出应报告清理了该任务\n${r.stdout}`);
+
+  const q1 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf-8', windowsHide: true });
+  assert.notEqual(q1.status, 0, '孤儿任务应已被删除');
+});
+
+test('autostart --prune：目标健在的任务不得误删', async t => {
+  if (process.platform !== 'win32') return t.skip('仅 Windows');
+  const port = await freePort();
+  const g = makeGuardianScript(port);
+  const taskName = `lanbook-prune-keep-${process.pid}-${Date.now()}`;
+  const env = { ...process.env, LANBOOK_HOME: g.dataDir, LANBOOK_AUTOSTART_TASK: taskName };
+  const cli = path.join(REPO_ROOT, 'bin', 'lanbook.js');
+  const reg = spawnSync(process.execPath, [cli, 'autostart'], { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
+  assert.equal(reg.status, 0, `注册应成功\n${reg.stderr}`);
+  t.after(() => {
+    spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { encoding: 'utf-8', windowsHide: true });
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  // 数据目录健在（autostart.vbs 存在）→ 不该被当成残留
+  const r = spawnSync(process.execPath, [cli, 'autostart', '--prune'], { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
+  assert.equal(r.status, 0, `--prune 应成功退出\n${r.stderr}`);
+  const q = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf-8', windowsHide: true });
+  assert.equal(q.status, 0, '目标健在的任务必须保留');
+});
+
+test('autostart --remove 与 --prune 互斥', async () => {
+  const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'bin', 'lanbook.js'), 'autostart', '--remove', '--prune'],
+    { encoding: 'utf-8', timeout: 60000, windowsHide: true });
+  assert.notEqual(r.status, 0, '互斥参数应报错退出');
+  assert.match(r.stderr + r.stdout, /不能同时使用/);
+});
