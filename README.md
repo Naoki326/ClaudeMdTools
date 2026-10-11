@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.6.1-blue)
+![version](https://img.shields.io/badge/version-1.8.0-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -94,6 +94,7 @@ pi install npm:lanbook
 /lanbook              # 弹出知识库文件选择器，选中即在浏览器打开
 /lanbook autostart    # 注册开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
 /lanbook status       # 查看服务与自启状态
+/lanbook autostart --prune  # 清理残留自启任务（Windows 孤儿计划任务）
 ```
 
 pi 装的这份包里就带着完整的服务端与 CLI，**不需要再 `npm i -g lanbook`**。详见[在 pi 里用 /lanbook](#在-pi-里用-lanbook)。
@@ -121,7 +122,7 @@ lanbook add <目录>          # 添加知识库根目录
 lanbook add --teach <目录>  # 添加课程根目录
 lanbook config             # 打印数据目录与三个配置文件路径（设 $EDITOR 时打开）
 lanbook config port 8090   # 查看 / 设置服务配置（port、host），重启后生效
-lanbook autostart          # 注册登录自启（--remove 卸载）
+lanbook autostart          # 注册登录自启（--remove 卸载，--prune 清理残留）
 lanbook stop               # 停止正在运行的服务
 lanbook --version          # 显示版本号（lanbook help 查看完整帮助）
 ```
@@ -149,6 +150,7 @@ pi install npm:lanbook
 /lanbook README.md    # 指定文件，输出可点击链接
 /lanbook ~/docs       # 目录 → 输出知识库首页链接
 /lanbook autostart    # 开启开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
+/lanbook autostart --prune  # 清理残留自启任务（指向已删脚本的孤儿计划任务，Windows）
 /lanbook status       # 查看服务与自启状态（服务没起来时先跑这个）
 /lanbook help         # 列出全部用法
 ```
@@ -263,6 +265,7 @@ stdout/stderr 统一追加到 `~/.lanbook/logs/service.log`；端口 / 监听地
 ```
 /lanbook status              # 查看服务与自启状态（含自启脚本指向是否有效）
 /lanbook autostart --remove  # 卸载自启
+/lanbook autostart --prune   # 清理残留自启任务（Windows，见下）
 ```
 
 ```bash
