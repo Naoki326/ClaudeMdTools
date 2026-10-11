@@ -94,7 +94,11 @@ pi install npm:lanbook
 /lanbook              # 弹出知识库文件选择器，选中即在浏览器打开
 /lanbook autostart    # 注册开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
 /lanbook status       # 查看服务与自启状态
+/lanbook open         # 启动服务（未运行时）并打开浏览器首页
+/lanbook stop         # 停止服务（先停自启守护防复活，验明身份后才杀进程）
+/lanbook config       # 查看数据目录与配置文件路径；config port 8090 改端口
 /lanbook autostart --prune  # 清理残留自启任务（Windows 孤儿计划任务）
+/lanbook help         # 列出全部用法
 ```
 
 pi 装的这份包里就带着完整的服务端与 CLI，**不需要再 `npm i -g lanbook`**。详见[在 pi 里用 /lanbook](#在-pi-里用-lanbook)。
@@ -131,7 +135,10 @@ lanbook --version          # 显示版本号（lanbook help 查看完整帮助�
 |---|---|---|
 | 开机自启 | `lanbook autostart` | `/lanbook autostart` |
 | 添加根目录 | `lanbook add <目录>` | `/lanbook <目录>` 或网页 ⚙ |
+| 启动 / 打开 | `lanbook open` | `/lanbook open` |
+| 停止服务 | `lanbook stop` | `/lanbook stop` |
 | 看服务状态 | — | `/lanbook status` |
+| 改端口 / 监听 | `lanbook config port 8090` | `/lanbook config port 8090` |
 
 ### 端口与监听地址
 
@@ -151,7 +158,10 @@ pi install npm:lanbook
 /lanbook ~/docs       # 目录 → 输出知识库首页链接
 /lanbook autostart    # 开启开机自启（登录自启，崩溃自动重启，Win / macOS / Linux）
 /lanbook autostart --prune  # 清理残留自启任务（指向已删脚本的孤儿计划任务，Windows）
+/lanbook open         # 启动服务并打开浏览器首页
+/lanbook stop         # 停止服务
 /lanbook status       # 查看服务与自启状态（服务没起来时先跑这个）
+/lanbook config       # 查看数据目录与配置路径
 /lanbook help         # 列出全部用法
 ```
 

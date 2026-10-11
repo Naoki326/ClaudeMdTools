@@ -119,15 +119,32 @@ function packagedCli(): string | null {
 }
 
 // 调包内 CLI（用 execFile 传数组，不经 shell，免引号与路径空格问题）
-async function runCli(args: string[], timeoutMs = 60000): Promise<{ code: number; out: string; err: string }> {
+// env 用于覆盖/清空继承来的环境变量（如 EDITOR）
+async function runCli(
+  args: string[],
+  timeoutMs = 60000,
+  env?: Record<string, string>,
+): Promise<{ code: number; out: string; err: string }> {
   const cli = packagedCli();
   if (!cli) return { code: -1, out: "", err: "找不到包内 CLI（bin/lanbook.js）" };
   return new Promise((resolve) => {
-    execFile(process.execPath, [cli, ...args], { windowsHide: true, timeout: timeoutMs },
+    execFile(process.execPath, [cli, ...args],
+      { windowsHide: true, timeout: timeoutMs, ...(env ? { env: { ...process.env, ...env } } : {}) },
       (e: any, stdout: string, stderr: string) => {
         resolve({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0, out: String(stdout || ""), err: String(stderr || "") });
       });
   });
+}
+
+// 输出一条自定义消息到会话，**立即显示**。
+//
+// 关键：不能传 `deliverAs: "nextTurn"`。那会把消息塞进 pi 的
+// _pendingNextTurnMessages 队列，只有等下一次用户 prompt() 时才被注入——
+// 命令当轮什么都不显示（实测：/lanbook help 的 RPC 响应是 disposition:"handled"，
+// 但 custom_message 事件数为 0）。不传 deliverAs、也不开 triggerTurn 时，
+// pi 走 _appendCustomMessage()：立即落盘并 emit，且不会触发多余的 LLM 回合。
+async function emitMessage(pi: ExtensionAPI, customType: string, content: string): Promise<void> {
+  await pi.sendMessage({ customType, content, display: true });
 }
 
 // ---------------------------------------------------------------- 服务探测 / 拉起
@@ -359,14 +376,7 @@ function shouldOpenLocalBrowser(): boolean {
 // 输出可点击链接到会话（pi-web 渲染 markdown-custom-message；TUI 显示链接文本）
 async function emitLink(pi: ExtensionAPI, label: string, url: string): Promise<void> {
   const md = `📄 **${label}**\n\n👉 在浏览器打开: [${url}](${url})`;
-  await pi.sendMessage(
-    {
-      customType: "lanbook-link",
-      content: md,
-      display: true,
-    },
-    { deliverAs: "nextTurn" },
-  );
+  await emitMessage(pi, "lanbook-link", md);
 }
 
 interface LinkTarget {
@@ -420,18 +430,58 @@ async function cmdAutostart(pi: ExtensionAPI, ctx: any, mode: "register" | "remo
   // CLI 输出多行说明，取有信息量的首行作为通知，完整内容随消息落盘
   const firstLine = text.split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
   const title = mode === "remove" ? "已卸载" : mode === "prune" ? "残留清理" : "已注册";
-  await pi.sendMessage(
-    {
-      customType: "lanbook-autostart",
-      content: `${title} lanbook 开机自启\n\n\`\`\`\n${text}\n\`\`\``,
-      display: true,
-    },
-    { deliverAs: "nextTurn" },
-  );
+  await emitMessage(pi, "lanbook-autostart", `${title} lanbook 开机自启\n\n\`\`\`\n${text}\n\`\`\``);
   ctx.ui.notify(
     mode === "remove" ? "已卸载自启" : mode === "prune" ? firstLine || "残留清理完成" : `已注册自启：${firstLine}`,
     "info",
   );
+}
+
+// /lanbook open —— 确保服务可用，并打开浏览器首页（等价 CLI 的 `lanbook open`）
+async function cmdOpen(pi: ExtensionAPI, ctx: any): Promise<void> {
+  const { host, port, loopback } = linkHost();
+  const ok = await ensureLanbook(port);
+  if (!ok) {
+    ctx.ui.notify(`无法启动 lanbook 服务（端口 ${port}）。可用 /lanbook status 排查`, "error");
+    return;
+  }
+  // 本机打开用回环地址；host 绑具体网卡时 127.0.0.1 不通，改用该网卡地址
+  const localUrl = `http://${localOpenHost()}:${port}/`;
+  await openInBrowser(localUrl);
+  if (loopback) {
+    ctx.ui.notify("lanbook host 已收敛到回环，链接仅本机可打开（改 ~/.lanbook/settings.json 的 host 可放开）", "warning");
+  }
+  await emitMessage(pi, "lanbook-open", `🌐 **已打开 lanbook 首页**\n\n- 本机: [${localUrl}](${localUrl})\n- 局域网: [http://${host}:${port}/](http://${host}:${port}/)`);
+  ctx.ui.notify(`已打开 ${localUrl}`, "info");
+}
+
+// /lanbook stop —— 停止服务（先停自启守护防复活，再按端口找进程、验明身份后才杀）
+async function cmdStop(pi: ExtensionAPI, ctx: any): Promise<void> {
+  const { code, out, err } = await runCli(["stop"], 90000);
+  const text = (out + err).trim();
+  if (code !== 0) {
+    ctx.ui.notify(`停止失败：${text || "未知错误"}`, "error");
+    return;
+  }
+  await emitMessage(pi, "lanbook-stop", `⏹️ **已停止 lanbook 服务**\n\n\`\`\`\n${text}\n\`\`\``);
+  ctx.ui.notify("已停止 lanbook 服务（下次登录自启会恢复）", "info");
+}
+
+// /lanbook config [key] [value] —— 查看数据目录与配置路径 / 读写服务配置
+// 语义与 CLI 完全一致（同一个 bin/lanbook.js），扩展不重复实现校验。
+async function cmdConfig(pi: ExtensionAPI, ctx: any, rest: string[]): Promise<void> {
+  // 必须显式清掉 EDITOR：CLI 的 `config`（无参数）在设了 $EDITOR 时会拉起编辑器
+  // 并同步等待，在 pi 里会挂住命令直到超时（npm test 就会注入
+  // EDITOR=notepad.exe，实测卡满 60s）。在会话里输出路径就够了，开编辑器无意义。
+  const { code, out, err } = await runCli(["config", ...rest], 60000, { EDITOR: "" });
+  const text = (out + err).trim();
+  if (code !== 0) {
+    ctx.ui.notify(`config 失败：${text || "未知错误"}`, "error");
+    return;
+  }
+  await emitMessage(pi, "lanbook-config", `⚙️ **lanbook 配置**\n\n\`\`\`\n${text}\n\`\`\``);
+  const firstLine = text.split("\n").map((l) => l.trim()).filter(Boolean)[0] || "";
+  ctx.ui.notify(firstLine || "配置已读取", "info");
 }
 
 // /lanbook status —— 看服务是否在跑、跑的是哪份代码、自启是否已注册
@@ -458,19 +508,40 @@ async function cmdStatus(pi: ExtensionAPI, ctx: any): Promise<void> {
 
   const cli = packagedCli();
   lines.push(`包内 CLI：${cli || "未找到"}`);
-  await pi.sendMessage(
-    { customType: "lanbook-status", content: lines.join("\n"), display: true },
-    { deliverAs: "nextTurn" },
-  );
+  await emitMessage(pi, "lanbook-status", lines.join("\n"));
   ctx.ui.notify(up ? `lanbook 运行中（${host}:${port}）` : "lanbook 未运行", up ? "info" : "warning");
 }
+
+// 帮助文本：子命令一览（/lanbook help 与参数错误时的提示共用一份，避免两处走样）
+const HELP_TEXT = [
+  "**/lanbook** — lanbook 知识库（打开文件链接 / 管理服务）",
+  "",
+  "| 命令 | 作用 |",
+  "|---|---|",
+  "| `/lanbook` | 弹出知识库文件选择器，选中即在浏览器打开 |",
+  "| `/lanbook <路径>` | 输出该文件的浏览器链接（局域网内任何设备可打开）|",
+  "| `/lanbook <目录>` | 输出知识库首页链接 |",
+  "| `/lanbook open` | 启动服务（未运行时）并打开浏览器首页 |",
+  "| `/lanbook stop` | 停止服务（先停自启守护防复活，验明身份后才杀进程）|",
+  "| `/lanbook status` | 查看服务与自启状态（排查服务没起来）|",
+  "| `/lanbook config` | 查看数据目录与三个配置文件路径 |",
+  "| `/lanbook config port` | 查看当前生效端口与来源 |",
+  "| `/lanbook config port 8090` | 改监听端口（重启服务后生效）|",
+  "| `/lanbook config host 127.0.0.1` | 仅本机可访问 |",
+  "| `/lanbook autostart` | **注册开机自启**（登录自启 + 崩溃自动重启，Win / macOS / Linux）|",
+  "| `/lanbook autostart --remove` | 卸载自启 |",
+  "| `/lanbook autostart --prune` | 清理残留自启任务（指向已删脚本的孤儿计划任务）|",
+  "| `/lanbook help` | 显示本帮助 |",
+  "",
+  "> 改了 port / host 后需 `/lanbook stop` 再 `/lanbook open`（或 `/lanbook autostart` 重启自启服务）才生效。",
+].join("\n");
 
 // ---------------------------------------------------------------- 命令
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("lanbook", {
     description:
-      "lanbook 知识库：链接文件到浏览器 / 开启开机自启。用法: /lanbook [路径] | autostart [--remove|--prune] | status",
+      "lanbook 知识库：链接文件到浏览器 / 管理服务（open、stop、status、config、autostart）。用法: /lanbook help",
     handler: async (args, ctx) => {
       const trimmed = (args || "").trim();
 
@@ -485,27 +556,20 @@ export default function (pi: ExtensionAPI) {
         await cmdStatus(pi, ctx);
         return;
       }
+      if (sub === "open") {
+        await cmdOpen(pi, ctx);
+        return;
+      }
+      if (sub === "stop") {
+        await cmdStop(pi, ctx);
+        return;
+      }
+      if (sub === "config") {
+        await cmdConfig(pi, ctx, rest);
+        return;
+      }
       if (sub === "help" || sub === "--help" || sub === "-h") {
-        await pi.sendMessage(
-          {
-            customType: "lanbook-help",
-            content: [
-              "**/lanbook** — 用法",
-              "",
-              "| 命令 | 作用 |",
-              "|---|---|",
-              "| `/lanbook` | 弹出知识库文件选择器 |",
-              "| `/lanbook <路径>` | 输出该文件的浏览器链接（局域网内任何设备可打开）|",
-              "| `/lanbook <目录>` | 输出知识库首页链接 |",
-              "| `/lanbook autostart` | **注册开机自启**（登录自启 + 崩溃自动重启，Win / macOS / Linux）|",
-              "| `/lanbook autostart --remove` | 卸载自启 |",
-              "| `/lanbook autostart --prune` | 清理残留自启任务（指向已删脚本的孤儿计划任务）|",
-              "| `/lanbook status` | 查看服务与自启状态（排查服务没起来）|",
-            ].join("\n"),
-            display: true,
-          },
-          { deliverAs: "nextTurn" },
-        );
+        await emitMessage(pi, "lanbook-help", HELP_TEXT);
         return;
       }
 

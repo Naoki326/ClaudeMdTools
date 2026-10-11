@@ -221,7 +221,7 @@ async function loadHandler() {
   return loadLanbookHandler(ext);
 }
 
-test('/lanbook help 列出子命令（含 autostart / status）', async t => {
+test('/lanbook help 列出子命令（含 autostart / status / open / stop / config）', async t => {
   const handler = await loadHandler();
   if (!handler) return t.skip('未找到 jiti');
 
@@ -248,6 +248,54 @@ test('/lanbook help 列出子命令（含 autostart / status）', async t => {
   assert.match(text, /\/lanbook autostart/, 'help 应含 autostart 子命令');
   assert.match(text, /\/lanbook status/, 'help 应含 status 子命令');
   assert.match(text, /开机自启/, 'help 应说明 autostart 的作用');
+  // CLI 有而扩展缺的子命令——曾经只能退回终端敲 lanbook，本次补齐
+  assert.match(text, /\/lanbook open/, 'help 应含 open 子命令');
+  assert.match(text, /\/lanbook stop/, 'help 应含 stop 子命令');
+  assert.match(text, /\/lanbook config/, 'help 应含 config 子命令');
+  assert.match(text, /config port 8090/, 'help 应给出改端口的示例');
+});
+
+// 回归：help/status/autostart 等自定义消息曾用 `deliverAs:"nextTurn"`，
+// 那会把消息塞进 pi 的 _pendingNextTurnMessages 队列，只在下一次用户 prompt()
+// 时才注入——命令当轮什么都不显示（实测 RPC 响应 disposition:"handled" 但
+// custom_message 事件数为 0）。不传 deliverAs 才会走 _appendCustomMessage()
+// 立即显示，且不会触发多余的 LLM 回合。
+test('/lanbook 的子命令输出立即投递（不得用 deliverAs:nextTurn 排队）', async t => {
+  const handler = await loadHandler();
+  if (!handler) return t.skip('未找到 jiti');
+
+  const base = mkTempDir('lanbook-deliver-');
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+
+  const calls = [];
+  const ext = path.join(__dirname, '..', 'extensions', 'lanbook-open.ts');
+  const jiti = loadJiti()(__filename, { interopDefault: true });
+  const mod = await jiti.import(ext);
+  let h = null;
+  (mod.default || mod)({
+    registerCommand: (n, o) => { h = o.handler; },
+    sendMessage: async (m, opts) => { calls.push({ type: m.customType, content: String(m.content || ''), opts }); },
+  });
+
+  const savedHome = process.env.LANBOOK_HOME;
+  process.env.LANBOOK_HOME = base;
+  try {
+    await h('help', fakeCtx(false).ctx);
+    await h('status', fakeCtx(false).ctx);
+    await h('config', fakeCtx(false).ctx);
+  } finally {
+    if (savedHome === undefined) delete process.env.LANBOOK_HOME; else process.env.LANBOOK_HOME = savedHome;
+  }
+
+  assert.ok(calls.length >= 3, `help/status/config 都应输出消息，实际 ${calls.length} 条`);
+  for (const c of calls) {
+    assert.notEqual(c.opts && c.opts.deliverAs, 'nextTurn',
+      `${c.type} 不得用 deliverAs:nextTurn（会被排队到下一轮，当轮不显示）`);
+    assert.ok(c.content.trim().length > 0, `${c.type} 内容不得为空`);
+  }
+  // help 的内容要真材实料，而不是一句空标题
+  const help = calls.find(c => c.type === 'lanbook-help');
+  assert.ok(help && help.content.split('\n').length >= 8, 'help 应包含完整命令表');
 });
 
 test('扩展通过包内 CLI 注册自启，脚本指向包内 server.js（不需要 npm i -g）', async t => {
