@@ -52,11 +52,18 @@ interface AutostartLib {
     target: string | null;
     launcher: { cmd: string; args: string[] } | null;
   };
+  clearStopMarker?: (dataDir?: string) => void;
 }
 let autostartLib: AutostartLib | null = null;
 try {
   autostartLib = require_("../lib/autostart.js");
 } catch {}
+
+// 清除 `lanbook stop` 留下的停止标记（守护脚本见到它会直接退出）。
+// 旧版 lib/autostart.js 无此导出时静默跳过（向后兼容）。
+function clearStopMarker(dir: string): void {
+  try { autostartLib?.clearStopMarker?.(dir); } catch {}
+}
 
 // ---------------------------------------------------------------- 配置
 
@@ -170,44 +177,73 @@ async function serviceUp(port: number): Promise<boolean> {
   }
 }
 
-function startLanbook(port: number): Promise<void> {
+// 经自启守护拉起服务（已注册且 target 有效时）。
+// 返回 true 表示已发起拉起；false 表示守护不可用（由 ensureLanbook 回退到 CLI）。
+function startLanbook(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    // 首选自启守护：已注册时经服务管理器拉起（win: cmd 守护脚本 / mac: launchctl
-    // kickstart / linux: systemctl start），自带崩溃自愈
+    // 主动启动服务 = 用户要它跑起来，先清掉 `lanbook stop` 留下的停止标记。
+    // 不清的话守护脚本第一行 `if exist stopFlag exit /b 0` 会直接退出：
+    // 服务永远起不来，而外表看只是「弹了个窗口、什么都没发生」（用户报告的现象）。
+    try { clearStopMarker(dataDir()); } catch {}
+
+    // 先校验 target 存在：自启脚本里写的是 server.js 绝对路径，
+    // 卸载 / 换装 / 换机器后可能指向已不存在的副本——那时拉起守护毫无意义
+    // （只会弹窗），应回退到包内 CLI。
     const d = autostartDescriptor();
-    if (d?.registered && d.launcher) {
-      try {
-        const child = spawn(d.launcher.cmd, d.launcher.args, { detached: true, stdio: "ignore", windowsHide: true });
-        child.on("error", () => {});
-        child.unref();
-      } catch {}
-      resolve();
+    const targetOk = !!(d?.target && fs.existsSync(d.target));
+    if (!(d?.registered && d.launcher && targetOk)) {
+      resolve(false);
       return;
     }
-    // 未注册自启：用包内 CLI 起（而不是 cwd 下的 server.js——
-    // pi 包的扩展运行时 cwd 是用户项目目录，那里没有 server.js）
-    const cli = packagedCli();
-    if (cli) {
-      try {
-        const child = spawn(process.execPath, [cli], { detached: true, stdio: "ignore", windowsHide: true });
-        child.unref();
-      } catch {}
-      resolve();
+    try {
+      const child = spawn(d.launcher.cmd, d.launcher.args, { detached: true, stdio: "ignore", windowsHide: true });
+      child.on("error", () => {});
+      child.unref();
+    } catch {
+      resolve(false);
       return;
     }
-    resolve();
+    resolve(true);
   });
 }
 
 async function ensureLanbook(port: number): Promise<boolean> {
   if (await serviceUp(port)) return true;
+
+  // 两级拉起，第二级是兜底：
+  //   1) 自启守护（已注册且 target 有效）——自带崩溃自愈，首选
+  //   2) 包内 CLI 直接起 —— 守护没配好 / 被停止标记拦住 / wscript 被策略禁用时
+  //      仍能起来。只靠第一级时，任何一环出问题都表现为「什么都没发生」。
   await startLanbook(port);
-  // 轮询等待就绪（最多 ~10s）
-  for (let i = 0; i < 20; i++) {
+  if (await waitUp(port, 12)) return true;
+
+  await startViaCli();
+  return waitUp(port, 24);
+}
+
+// 轮询等端口就绪（次数 × 500ms）
+async function waitUp(port: number, tries: number): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
     await new Promise((r) => setTimeout(r, 500));
     if (await serviceUp(port)) return true;
   }
   return false;
+}
+
+// 直接调包内 CLI 启动服务（等价 `lanbook` 无参数：前台跑 server.js，
+// 此处 detached 脱离扩展进程，扩展退出后服务继续跑）
+function startViaCli(): Promise<void> {
+  return new Promise((resolve) => {
+    const cli = packagedCli();
+    if (cli) {
+      try {
+        const child = spawn(process.execPath, [cli], { detached: true, stdio: "ignore", windowsHide: true });
+        child.on("error", () => {});
+        child.unref();
+      } catch {}
+    }
+    resolve();
+  });
 }
 
 // ---------------------------------------------------------------- 路径解析

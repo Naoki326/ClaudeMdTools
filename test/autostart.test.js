@@ -17,6 +17,7 @@ const {
   selectOrphanTasks,
   parseTaskList,
   pruneOrphanAutostart,
+  clearStopMarker,
   generateLaunchdPlist,
   generateSystemdUnit,
   launchdPlistPath,
@@ -245,6 +246,27 @@ test('stopAutostartGuard(win32)：写停止标记、返回 null（进程由 stop
   assert.ok(fs.existsSync(path.join(dataDir, '.service-stopped')), '应写入停止标记（守护循环退出，服务不复活）');
 });
 
+// 回归：主动启动服务时必须清掉停止标记，否则守护脚本第一行
+// `if exist stopFlag exit /b 0` 直接退出——服务永远起不来，
+// 而外表看只是「弹了个窗口、什么都没发生」（用户报告的现象）。
+test('clearStopMarker：清除 `lanbook stop` 留下的停止标记', () => {
+  const base = mkTempDir('lanbook-as-clearmark-');
+  t_cleanup(base);
+  const dataDir = path.join(base, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  stopAutostartGuard({ dataDir, platform: 'win32', run: fakeRun() });
+  const flag = path.join(dataDir, '.service-stopped');
+  assert.ok(fs.existsSync(flag), '前置：停止标记应已写入');
+
+  clearStopMarker(dataDir);
+  assert.ok(!fs.existsSync(flag), 'clearStopMarker 应删除停止标记');
+  // 幂等：标记不存在时不报错
+  assert.doesNotThrow(() => clearStopMarker(dataDir), '重复调用应无害');
+  // 数据目录不存在时也不报错
+  assert.doesNotThrow(() => clearStopMarker(path.join(base, 'nonexistent')));
+});
+
 test('stopAutostartGuard(darwin / linux)：已注册时停服务管理器实例；未注册返回 null', () => {
   const base = mkTempDir('lanbook-as-stop-unix-');
   t_cleanup(base);
@@ -284,7 +306,20 @@ test('describeAutostart：三平台从注册产物提取 server.js 指向与拉�
   const dWin = describeAutostart({ dataDir, platform: 'win32' });
   assert.equal(dWin.registered, true);
   assert.equal(dWin.target, SERVER_JS);
+  // 无 vbs（极老注册产物）→ 退回 cmd 兜底
   assert.deepEqual(dWin.launcher, { cmd: 'cmd', args: ['/c', 'start', '', path.join(dataDir, 'autostart-task.cmd')] });
+
+  // 有 vbs → 用 wscript 拉起（隐藏窗口）。
+  // 不得用 `cmd /c start`：start 会新建**可见** cmd 窗，而守护是无限循环，
+  // 那个窗口会一直杵在桌面上（用户报告：只弹出一个 cmd 框）。
+  const vbsPath = path.join(dataDir, 'autostart.vbs');
+  fs.writeFileSync(vbsPath,
+    `CreateObject("WScript.Shell").Run """${path.join(dataDir, 'autostart-task.cmd')}""", 0, False\r\n`, 'utf-8');
+  const dWinVbs = describeAutostart({ dataDir, platform: 'win32' });
+  assert.deepEqual(dWinVbs.launcher.args, [vbsPath], '有 vbs 时应经 vbs 隐藏窗口拉起');
+  assert.match(dWinVbs.launcher.cmd, /wscript(\.exe)?$/i, '启动器应为 wscript');
+  assert.ok(!dWinVbs.launcher.args.some((a) => a === 'start'),
+    'launcher 不得含 cmd 的 start 子命令（会弹出可见控制台窗口）');
 
   // darwin：plist（含 XML 转义还原）+ kickstart 拉起
   const plistPath = launchdPlistPath('lanbook-autostart', base);
