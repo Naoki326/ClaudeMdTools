@@ -61,6 +61,11 @@ const { migrated } = initDataDir(DATA_DIR, __dirname);
 for (const label of migrated) {
   console.log(`迁移: ${label} 已迁入数据目录（旧文件改名 *.migrated.bak 留底）`);
 }
+// CWD 钉到数据目录：服务是常驻进程，会一直持有启动时继承的 CWD——Windows 上
+// 那个目录从此无法 rename/delete（2026-10 实测锁死过 pi-web 的安装目录）。服务
+// 全部路径本来就是绝对路径（数据目录 + __dirname），chdir 零行为变化，只解除
+// 对启动者目录的占用；也是所有拉起路径（守护脚本 cd /d / spawn cwd）之外的最终兜底。
+process.chdir(DATA_DIR);
 
 // 服务配置（ADR-0003 / CONTEXT.md「服务配置」）：数据目录 settings.json 的
 // port / host。生效优先级：PORT 环境变量 > settings > 内置默认 8080 / 0.0.0.0；

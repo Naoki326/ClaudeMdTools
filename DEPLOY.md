@@ -30,17 +30,21 @@ lanbook autostart        # 注册登录自启（幂等，重复执行覆盖旧�
 原理链路（三平台同一套语义，各自的系统原生机制，详见 ADR-0005）：
 
 ```
-Windows  计划任务 lanbook-autostart（登录 + 解锁触发，无需管理员）
+Windows  计划任务 lanbook-autostart（登录 + 解锁触发，无需管理员，WorkingDirectory=数据目录）
   → wscript  <数据目录>/autostart.vbs        （隐藏窗口，无黑框）
-    → cmd      <数据目录>/autostart-task.cmd （守护循环：崩溃 3 秒重启；stdout/stderr 重定向）
-      → node   <包目录>/server.js
+    → cmd      <数据目录>/autostart-task.cmd （守护循环：崩溃 3 秒重启；CWD 钉在数据目录；stdout/stderr 重定向）
+      → node   <包目录>/server.js            （启动即 chdir 数据目录）
 
 macOS    launchd LaunchAgent ~/Library/LaunchAgents/lanbook-autostart.plist
-           （RunAtLoad 登录拉起，KeepAlive 崩溃保活，日志直接写 service.log）
+           （RunAtLoad 登录拉起，KeepAlive 崩溃保活，日志直接写 service.log，WorkingDirectory=数据目录）
 
 Linux    systemd user 单元 ~/.config/systemd/user/lanbook-autostart.service
-           （default.target 登录拉起，Restart=on-failure + RestartSec=3 崩溃重启）
+           （default.target 登录拉起，Restart=on-failure + RestartSec=3 崩溃重启，WorkingDirectory=数据目录）
 ```
+
+守护与服务的 CWD 一律钉在数据目录：常驻进程会一直持有启动时继承的工作目录，
+Windows 上表现为「那个目录无法 rename/delete」（例如从某个包的安装目录里拉起守护，
+之后 npm 更新该包报 EBUSY）。见 ADR-0005「工作目录钉在数据目录」。
 
 | 项目 | 值 |
 |------|-----|

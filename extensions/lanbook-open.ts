@@ -196,7 +196,10 @@ function startLanbook(port: number): Promise<boolean> {
       return;
     }
     try {
-      const child = spawn(d.launcher.cmd, d.launcher.args, { detached: true, stdio: "ignore", windowsHide: true });
+      // cwd 钉在数据目录：pi 会话可能停在任何项目目录里，守护无限循环会一直
+      // 持有继承来的 CWD——Windows 上那个目录从此无法 rename/delete（与
+      // autostart-task.cmd 的 cd /d 同一套防护；旧版守护脚本没有 cd，靠这里兜）
+      const child = spawn(d.launcher.cmd, d.launcher.args, { cwd: dataDir(), detached: true, stdio: "ignore", windowsHide: true });
       child.on("error", () => {});
       child.unref();
     } catch {

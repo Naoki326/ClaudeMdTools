@@ -243,6 +243,7 @@ async function cmdOpen() {
     const childEnv = { ...process.env };
     delete childEnv.PORT; // 服务绑 settings.json 的端口，与上面探测保持一致
     const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+      cwd: dataDir, // 不继承 CLI 的 CWD：server.js 常驻，会一直持有启动目录（win32 锁 rename）
       detached: true,
       stdio: 'ignore',
       env: childEnv,

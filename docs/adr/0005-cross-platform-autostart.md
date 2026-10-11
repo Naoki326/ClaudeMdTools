@@ -22,6 +22,19 @@
 
 任务名统一：`LANBOOK_AUTOSTART_TASK`（默认 `lanbook-autostart`）在三平台分别用作计划任务名 / launchd Label 与 plist 文件名 / systemd 单元基名——测试隔离只需一个环境变量。
 
+## 工作目录钉在数据目录
+
+守护与服务是常驻进程，会**一直持有**启动时继承的 CWD；继承来的目录（宿主 shell、pi 会话停着的任何项目目录）在 win32 上从此无法 rename/delete。真实事故（2026-10）：守护从某包的安装目录里被拉起，该目录被 cmd/node 钉死，npm 更新那个包报 EBUSY——占用关系在进程命令行里不可见，只有枚举各进程 CWD 才能定位。这与 `set "PORT="` 防环境变量渗透是同一课：**常驻进程不继承宿主环境里任何会「占住不放」的东西**。三平台各自的钉法：
+
+| 产物 | 钉法 |
+|---|---|
+| Windows 守护脚本 | `cd /d <数据目录>`（进 `:loop` 前执行一次；所有拉起路径都汇到这个脚本，钉一处全覆盖） |
+| Windows 计划任务动作 | `New-ScheduledTaskAction -WorkingDirectory <数据目录>`（默认是 System32，不锁用户目录但也属「钉在别人家」；与上者双保险） |
+| macOS plist | `WorkingDirectory`（launchd 默认 CWD 是 `/`） |
+| Linux unit | `WorkingDirectory=`（systemd user 单元默认 CWD 是 `$HOME`） |
+
+服务端兜底：`server.js` 启动即 `process.chdir(DATA_DIR)`——服务内部路径本就全为绝对路径（数据目录 + `__dirname`），chdir 零行为变化，只解除对启动者目录的占用，也覆盖未来新增的拉起路径。pi 扩展拉起守护（`lanbook-open.ts` startLanbook）与 `lanbook open` 直启服务（`bin/lanbook.js` cmdOpen）的 spawn 同样显式传 `cwd`。
+
 ## 孤儿任务清理（Windows 特有）
 
 Windows 的注册产物**分居两处**：系统侧的计划任务、数据目录侧的 `autostart.vbs`。两者一旦不同步，就产生孤儿任务——数据目录先没了（Temp 被清理、`LANBOOK_HOME` 换位置、测试临时目录回收），任务还留着，于是每次登录 / 工作站解锁都弹「无法找到脚本文件 `...\autostart.vbs`」。macOS / Linux 的 plist / unit 与注册动作同一处，不存在这种半截状态，所以清理只针对 Windows。
@@ -54,3 +67,4 @@ Windows 的注册产物**分居两处**：系统侧的计划任务、数据目�
 - systemd `append:` 日志需要 systemd ≥ 240（2019）；更老的环境 `enable --now` 会明确报错，不静默丢日志
 - 纯 SSH 无图形登录的 macOS 上 `launchctl bootstrap gui/<uid>` 不可用，注册时报错并提示在桌面会话中操作（不静默降级）
 - 任务描述被用作清理的认领签名（`TASK_MARKER`），故注册时必须写 `-Description`；描述保持纯 ASCII，避免区域设置差异下的乱码
+- 守护与服务的工作目录固定为数据目录（守护脚本 `cd /d` + 计划任务 `-WorkingDirectory` + 扩展/CLI spawn `cwd` + `server.js` chdir 四层，见上文）；服务内部全用绝对路径，chdir 无行为变化，仅解除 win32 上对启动者目录的 rename 锁

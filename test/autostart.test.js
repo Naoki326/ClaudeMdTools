@@ -56,14 +56,17 @@ function sawCall(run, cmd, ...argsPrefix) {
 
 // ---------- 生成器（纯函数，任何平台可测） ----------
 
-test('generateLaunchdPlist：Label / ProgramArguments / RunAtLoad / KeepAlive / 日志路径', () => {
+test('generateLaunchdPlist：Label / ProgramArguments / WorkingDirectory / RunAtLoad / KeepAlive / 日志路径', () => {
   const logPath = '/home/u/.lanbook/logs/service.log';
-  const xml = generateLaunchdPlist({ label: 'lanbook-autostart', nodeBin: NODE_BIN, serverJs: SERVER_JS, logPath });
+  const workingDir = '/home/u/.lanbook';
+  const xml = generateLaunchdPlist({ label: 'lanbook-autostart', nodeBin: NODE_BIN, serverJs: SERVER_JS, logPath, workingDir });
   assert.match(xml, /^<\?xml version="1\.0" encoding="UTF-8"\?>/);
   assert.match(xml, /<!DOCTYPE plist /);
   assert.ok(xml.includes('<string>lanbook-autostart</string>'), '应含 Label');
   assert.ok(xml.includes(`<string>${NODE_BIN}</string>`), 'ProgramArguments 应含 node 绝对路径');
   assert.ok(xml.includes(`<string>${SERVER_JS}</string>`), 'ProgramArguments 应含 server.js 绝对路径');
+  assert.ok(xml.includes('<key>WorkingDirectory</key>'), '应含 WorkingDirectory（CWD 钉数据目录，不继承启动者目录）');
+  assert.ok(xml.includes(`<string>${workingDir}</string>`), 'WorkingDirectory 应指向数据目录');
   assert.ok(xml.includes('<key>RunAtLoad</key>'), '应含 RunAtLoad（注册即启动 / 登录拉起）');
   assert.ok(xml.includes('<key>KeepAlive</key>'), '应含 KeepAlive（崩溃保活）');
   assert.ok(xml.includes(`<string>${logPath}</string>`), 'stdout/stderr 应重定向到数据目录日志');
@@ -78,10 +81,12 @@ test('generateLaunchdPlist：路径含 XML 特殊字符时转义', () => {
   assert.doesNotMatch(xml, /<string>\/apps\/a&b\//, '原样 & 不应出现在 XML 里');
 });
 
-test('generateSystemdUnit：ExecStart 引号路径 / Restart=on-failure / RestartSec=3 / append 日志 / default.target', () => {
+test('generateSystemdUnit：ExecStart 引号路径 / WorkingDirectory / Restart=on-failure / RestartSec=3 / append 日志 / default.target', () => {
   const logPath = '/home/u/.lanbook/logs/service.log';
-  const unit = generateSystemdUnit({ nodeBin: NODE_BIN, serverJs: SERVER_JS, logPath });
+  const workingDir = '/home/u/.lanbook';
+  const unit = generateSystemdUnit({ nodeBin: NODE_BIN, serverJs: SERVER_JS, logPath, workingDir });
   assert.ok(unit.includes(`ExecStart="${NODE_BIN}" "${SERVER_JS}"`), 'ExecStart 路径应双引号包裹（空格安全）');
+  assert.ok(unit.includes(`WorkingDirectory=${workingDir}`), 'CWD 应钉在数据目录（不继承、不占用启动者目录）');
   assert.ok(unit.includes('Restart=on-failure'), '崩溃自愈：Restart=on-failure');
   assert.ok(unit.includes('RestartSec=3'), '对齐 Windows 守护循环：3 秒后重启');
   assert.ok(unit.includes(`StandardOutput=append:${logPath}`), 'stdout 追加写数据目录日志');
@@ -125,6 +130,7 @@ test('registerAutostart(darwin)：写 plist + bootout 旧实例 + bootstrap gui/
   const xml = fs.readFileSync(plistPath, 'utf-8');
   assert.ok(xml.includes(SERVER_JS), 'plist 应写 server.js 绝对路径');
   assert.ok(xml.includes(path.join(dataDir, 'logs', 'service.log')), 'plist 日志应指向数据目录');
+  assert.ok(xml.includes(`<string>${dataDir}</string>`), 'WorkingDirectory 应钉在数据目录');
 
   assert.ok(sawCall(run, 'launchctl', 'bootout', 'gui/501/lanbook-autostart'), '注册前应先卸旧实例（重复注册 = 覆盖）');
   const bs = run.calls.find(c => c.args[0] === 'bootstrap');
@@ -158,7 +164,9 @@ test('registerAutostart(linux)：写 unit + daemon-reload + enable --now', () =>
   const unitPath = systemdUnitPath('lanbook-autostart', { xdgConfigHome: path.join(base, 'xdg') });
   assert.equal(result.unitPath, unitPath);
   assert.ok(fs.existsSync(unitPath), 'unit 应写入 $XDG_CONFIG_HOME/systemd/user');
-  assert.ok(fs.readFileSync(unitPath, 'utf-8').includes(SERVER_JS), 'unit 应写 server.js 绝对路径');
+  const unitContent = fs.readFileSync(unitPath, 'utf-8');
+  assert.ok(unitContent.includes(SERVER_JS), 'unit 应写 server.js 绝对路径');
+  assert.ok(unitContent.includes(`WorkingDirectory=${dataDir}`), 'WorkingDirectory 应钉在数据目录');
 
   assert.ok(sawCall(run, 'systemctl', '--user', 'daemon-reload'), '应 daemon-reload');
   assert.ok(sawCall(run, 'systemctl', '--user', 'enable', '--now', 'lanbook-autostart.service'), '应 enable --now（注册即启动 + 登录自启）');
@@ -189,10 +197,15 @@ test('registerAutostart(win32)：生成 vbs/cmd 守护包装 + PowerShell 注册
   assert.ok(cmdContent.includes(':loop'), '守护循环应有 :loop');
   assert.ok(cmdContent.includes(SERVER_JS), '守护脚本应写 server.js 绝对路径');
   assert.ok(cmdContent.includes('.service-stopped'), '守护脚本应检测停止标记（lanbook stop 防复活）');
+  const cdIndex = cmdContent.indexOf(`cd /d "${dataDir}"`);
+  assert.ok(cdIndex !== -1, '守护脚本应先把 CWD 钉到数据目录（否则无限循环持有继承来的目录，win32 上锁死 rename）');
+  assert.ok(cdIndex < cmdContent.indexOf(':loop'), 'cd 应在进入循环前执行一次');
 
   const ps = run.calls.find(c => c.cmd === 'powershell.exe' && c.args[3].includes('Register-ScheduledTask'));
   assert.ok(ps, '应经 powershell 注册计划任务');
   assert.ok(ps.args[3].includes(TASK_MARKER), 'PS 脚本应写入自启标识描述（供残留清理认领）');
+  assert.ok(ps.args[3].includes('-WorkingDirectory'), '任务动作应配置 WorkingDirectory');
+  assert.ok(ps.args[3].includes(dataDir), 'WorkingDirectory 应指向数据目录');
   assert.ok(sawCall(run, 'schtasks', '/Query', '/TN', 'lanbook-autostart'), '注册后应查询校验');
 });
 
