@@ -678,9 +678,33 @@ function focusReadingPane() {
   if (active && active !== document.body && active !== document.documentElement &&
       (active.closest('.dialog-overlay') || active.matches('input, textarea, select, [contenteditable]'))) return;
   const content = document.getElementById('content');
-  const view = content.querySelector('.markdown-view') || content.querySelector('#course-frame');
+  const frame = content.querySelector('#course-frame');
+  if (frame) { focusFrameWhenReady(frame); return; }
+  const view = content.querySelector('.markdown-view');
   if (!view) return;
   try { view.focus({ preventScroll: true }); } catch { view.focus(); }
+}
+
+// 等 iframe 的最终文档就绪后再聚焦。
+//
+// focusReadingPane 在 innerHTML 写入后同步调用，此刻 iframe 里还是 about:blank
+// 初始文档（它的 readyState 已经是 "complete"，不能拿 readyState 当就绪依据）。
+// 若此时就 focus：焦点状态建立在即将被销毁的临时文档上，src 文档替换后焦点
+// 窗口是否保留纯属浏览器竞态（实测同一份代码时灵时不灵）；且子框架的键盘扩展
+// （如 Vimium C，document_start 注入）尚未注入，收不到任何 focus 事件、不会
+// 激活——按键事件即使进了子框架也无人处理，用户必须再鼠标点一下正文才恢复。
+// 等 load 事件（最终文档 + 扩展脚本已就位）后聚焦，焦点真正进入子框架并触发
+// focus 事件，与「用户点一下 iframe」等价。跨源 iframe 读不到 contentDocument，
+// 直接走 load 分支；load 后的 frame.focus() 对跨源框架依然有效。
+function focusFrameWhenReady(frame) {
+  const focusFrame = () => { try { frame.focus({ preventScroll: true }); } catch { frame.focus(); } };
+  let doc = null;
+  try { doc = frame.contentDocument; } catch { doc = null; }
+  if (doc && doc.readyState === 'complete' && doc.URL !== 'about:blank') {
+    focusFrame(); // 已是最终文档（如热更新重建 iframe 后调用），直接聚焦
+  } else {
+    frame.addEventListener('load', focusFrame, { once: true });
+  }
 }
 
 // 编辑模式

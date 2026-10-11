@@ -6,8 +6,15 @@
 // Vimium C 执行 j/k 时，会从「最近一次真实点击的元素」出发向上找第一个可滚动祖先——
 // 用户点侧边栏打开文档后，第一步就命中 #file-list，于是 j/k 滚侧边栏、正文不动。
 //
-// 修复：打开文档（loadFile / openCourse）后把键盘焦点交给正文阅读区，等价于替用户
-// 完成「点一下正文」这一步。
+// 修复一（92ef463）：打开文档（loadFile / openCourse）后把键盘焦点交给正文阅读区，
+// 等价于替用户完成「点一下正文」这一步。
+//
+// 修复二（本次）：md 路径修复后 HTML 页面仍要点一下才生效——iframe 的聚焦时机有讲究：
+// focusReadingPane 在 innerHTML 写入后同步调用，此刻 iframe 里还是 about:blank 初始
+// 文档，就聚焦它的话，焦点状态建立在即将销毁的临时文档上，src 文档替换后焦点窗口
+// 是否保留纯属浏览器竞态；且子框架的键盘扩展（Vimium C 等，document_start 注入）
+// 尚未注入，收不到 focus 事件、不会激活，按键事件即使进了子框架也无人处理。
+// 因此 iframe 必须等 load 事件（最终文档 + 扩展脚本就位）后再聚焦。
 //
 // 浏览器无法自动化驱动，故此处按 katex-client.test.js 的既有惯例，用 vm 沙箱加载
 // index.html 内联脚本片段 + 源码断言验证前提。真实交互由用户手动冒烟。
@@ -72,22 +79,33 @@ test('loadFile 与 openCourse 渲染后都调用 focusReadingPane()', () => {
     'focusReadingPane() 必须在正文 innerHTML 写入之后调用');
 });
 
-// vm 沙箱里跑真实的 focusReadingPane()，验证它的聚焦目标选择与防抢焦点守卫
-function runFocusReadingPane({ editing = false, activeEl = null, view = 'md' } = {}) {
+// vm 沙箱里跑真实的 focusReadingPane() + focusFrameWhenReady()，
+// 验证聚焦目标选择、防抢焦点守卫与 iframe 的 load 时机处理
+function runFocusReadingPane({ editing = false, activeEl = null, mode = 'md', iframeDoc = null } = {}) {
   const vm = require('node:vm');
-  const src = extractFunction(readIndex(), 'focusReadingPane');
+  const html = readIndex();
+  const src = extractFunction(html, 'focusReadingPane') + '\n' + extractFunction(html, 'focusFrameWhenReady');
   const focused = [];
+  const listeners = [];
 
-  const mkView = (kind) => ({
-    kind,
-    focus(arg) { focused.push({ kind, arg }); },
-  });
-  const mdView = mkView('markdown-view');
-  const frame = mkView('course-frame');
+  const mdView = {
+    focus(arg) { focused.push({ kind: 'markdown-view', arg }); },
+  };
+  // iframe mock：iframeDoc 描述 contentDocument 的返回形态
+  //   - null：同步抛异常（跨源框架读不到 contentDocument）
+  //   - { readyState, url }：返回对应形态的文档
+  const frame = {
+    focus(arg) { focused.push({ kind: 'course-frame', arg }); },
+    get contentDocument() {
+      if (iframeDoc === null) throw new Error('Blocked a frame with origin from accessing a cross-origin frame');
+      return { readyState: iframeDoc.readyState, URL: iframeDoc.url };
+    },
+    addEventListener(type, fn) { listeners.push({ type, fn }); },
+  };
   const content = {
     querySelector(sel) {
-      if (sel === '.markdown-view') return view === 'md' ? mdView : null;
-      if (sel === '#course-frame') return view === 'html' ? frame : null;
+      if (sel === '.markdown-view') return mode === 'md' ? mdView : null;
+      if (sel === '#course-frame') return mode === 'html' ? frame : null;
       return null;
     },
   };
@@ -104,21 +122,59 @@ function runFocusReadingPane({ editing = false, activeEl = null, view = 'md' } =
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: 'index.html focusReadingPane' });
   vm.runInContext('focusReadingPane();', sandbox);
-  return { focused, sandbox };
+  return { focused, listeners, frame, sandbox };
 }
 
-test('focusReadingPane：md 文档聚焦 .markdown-view，HTML 课程聚焦 iframe', () => {
-  const md = runFocusReadingPane({ view: 'md' });
+test('focusReadingPane：md 文档同步聚焦 .markdown-view', () => {
+  const md = runFocusReadingPane({ mode: 'md' });
   assert.deepEqual(md.focused.map(f => f.kind), ['markdown-view'],
     'md 文档应聚焦 .markdown-view（Vimium C 的锚点由此落到正文滚动容器）');
-
-  const html = runFocusReadingPane({ view: 'html' });
-  assert.deepEqual(html.focused.map(f => f.kind), ['course-frame'],
-    'HTML 课程应聚焦 iframe（Vimium C 会走 detectUsableChild 把 j/k 转发进子框架）');
 
   // preventScroll：聚焦不得把已恢复的阅读位置弹回顶部
   assert.equal(md.focused[0].arg && md.focused[0].arg.preventScroll, true,
     '聚焦应带 preventScroll: true，避免打断阅读位置');
+});
+
+test('HTML 页面：iframe 还是 about:blank 时不聚焦，等 load 后再聚焦', () => {
+  // focusReadingPane 同步调用于 innerHTML 写入后，此刻 iframe 是 about:blank 初始文档
+  //（readyState 已是 complete，但 URL 是 about:blank）——不能立刻聚焦
+  const pending = runFocusReadingPane({
+    mode: 'html',
+    iframeDoc: { readyState: 'complete', url: 'about:blank' },
+  });
+  assert.deepEqual(pending.focused, [],
+    'about:blank 初始文档不应被聚焦：焦点会随文档替换丢失，且子框架扩展脚本尚未注入收不到 focus 事件');
+  assert.equal(pending.listeners.length, 1, '应挂 load 监听等待最终文档');
+  assert.equal(pending.listeners[0].type, 'load', '监听的是 load 事件');
+
+  // load 后（最终文档 + 扩展脚本已就位）聚焦，且带 preventScroll
+  pending.listeners[0].fn();
+  assert.deepEqual(pending.focused.map(f => f.kind), ['course-frame'],
+    'load 后应聚焦 iframe，焦点真正进入子框架并触发 focus 事件（等价用户点一下）');
+  assert.equal(pending.focused[0].arg && pending.focused[0].arg.preventScroll, true,
+    'load 后聚焦也应带 preventScroll: true');
+});
+
+test('HTML 页面：iframe 已是加载完成的最终文档时同步聚焦', () => {
+  // 热更新重建 iframe 后 focusReadingPane 被调用时，src 文档可能已加载完成
+  const done = runFocusReadingPane({
+    mode: 'html',
+    iframeDoc: { readyState: 'complete', url: 'http://127.0.0.1:30142/kbfile/0/a.html' },
+  });
+  assert.deepEqual(done.focused.map(f => f.kind), ['course-frame'],
+    '最终文档已就位时应同步聚焦 iframe，不再等 load（否则永远不聚焦）');
+  assert.deepEqual(done.listeners, [], '已加载的 iframe 不应再挂 load 监听');
+});
+
+test('HTML 页面：跨源 iframe 读不到 contentDocument 时走 load 分支兜底', () => {
+  // 部署形态若出现跨源，contentDocument 访问抛异常——不能让聚焦整个失败
+  const cross = runFocusReadingPane({ mode: 'html', iframeDoc: null });
+  assert.deepEqual(cross.focused, [], '跨源时应等 load，不应同步聚焦');
+  assert.equal(cross.listeners.length, 1, '跨源时应挂 load 监听兜底');
+
+  cross.listeners[0].fn();
+  assert.deepEqual(cross.focused.map(f => f.kind), ['course-frame'],
+    'load 后跨源 iframe 元素本身仍可聚焦（focus 进入子浏览上下文）');
 });
 
 test('focusReadingPane 不抢焦点：编辑模式 / 输入框 / 对话框聚焦时不介入', () => {
