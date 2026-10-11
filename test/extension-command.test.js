@@ -11,7 +11,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { mkTempDir, makeInstallDir, removeInstallDir, startServer, REPO_ROOT } = require('./helpers');
+const { mkTempDir, makeInstallDir, removeInstallDir, startServer, REPO_ROOT, withWindowsTaskLock } = require('./helpers');
 const { spawnSync } = require('node:child_process');
 
 // 定位 pi 自带的 jiti（扩展是 TypeScript，需转译后加载）
@@ -255,6 +255,9 @@ test('扩展通过包内 CLI 注册自启，脚本指向包内 server.js（不�
   if (!handler) return t.skip('未找到 jiti');
   if (process.platform !== 'win32') return t.skip('autostart 仅 Windows');
 
+  // 本用例会真注册计划任务，而注册流程内含全局清理（pruneOrphanAutostart）——
+  // 不加锁会顺手清掉其它测试文件刚造出的孤儿任务，导致那些用例随机失败
+  await withWindowsTaskLock(async () => {
   const base = mkTempDir('lanbook-autostart-');
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
 
@@ -300,6 +303,7 @@ test('扩展通过包内 CLI 注册自启，脚本指向包内 server.js（不�
   } finally {
     deleteTask();
   }
+  });
 });
 
 test('/lanbook status 报告自启脚本指向不存在的 server.js（卸载/换装后的典型故障）', async t => {

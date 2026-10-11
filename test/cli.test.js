@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { mkTempDir, makeInstallDir, removeInstallDir, startServer, sleep, freePort } = require('./helpers');
+const { mkTempDir, makeInstallDir, removeInstallDir, startServer, sleep, freePort, withWindowsTaskLock } = require('./helpers');
 
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf-8'));
 
@@ -312,6 +312,9 @@ test('lanbook open：服务已运行时不重复启动，直接打开浏览器',
 });
 
 test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows）', { skip: process.platform !== 'win32' }, async t => {
+  // 计划任务是机器级资源，且注册会全局清理残留任务（pruneOrphanAutostart）——
+  // 必须与其它测试文件的注册/清理互斥（见 helpers.js#withWindowsTaskLock）
+  await withWindowsTaskLock(async () => {
   const { installDir, dataDir } = setup(t, 'lanbook-cli-autostart-');
   // 任务名带固定前缀，便于注册时自清残留 / 手工排查（见下方 t.after 说明）
   const taskName = `lanbook-test-${Date.now().toString(36)}`;
@@ -356,6 +359,7 @@ test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows�
   const q2 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf8', windowsHide: true });
   assert.notEqual(q2.status, 0, '计划任务应已卸载');
   assert.ok(!fs.existsSync(path.join(dataDir, 'autostart.vbs')), '卸载应删除 autostart.vbs');
+  });
 });
 
 test('lanbook stop：停止正在运行的服务并释放端口', async t => {

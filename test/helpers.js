@@ -132,4 +132,61 @@ async function startServer({ t, installDir, env = {}, port = null, entry = 'serv
   };
 }
 
-module.exports = { mkTempDir, makeInstallDir, removeInstallDir, snapshotDir, freePort, startServer, sleep, REPO_ROOT };
+// Windows 计划任务锁：计划任务是**全机器唯一**的资源，而 node --test 默认并行
+// 跑各测试文件。而「注册时自动清理残留任务」（lib/autostart.js 的
+// pruneOrphanAutostart）是**全局操作**——A 文件注册时会顺手清掉 B 文件刚造出的
+// 孤儿任务，B 随后的 `--prune` 只能报「未发现残留」，断言随机失败（实测确定性
+// 复现：造孤儿 → 另一安装注册 → 原任务已被清掉）。
+//
+// 两道闸门，缺一不可：
+// - 进程内 async 互斥（promise 队列）：同一进程的**并发**用例不得同时进入
+// - 跨进程 mkdir 目录锁（AGENTS.md 惯例）：并行跑的**不同**测试文件之间互斥
+//
+// 可重入性靠 AsyncLocalStorage 判定：它按异步上下文区分「嵌套调用」（继承 store，
+// 直接执行）与「并发调用」（无 store，排队）。不可用「深度计数」代替——那会让
+// 同进程的并发调用都误判为重入，锁形同虚设（本工具的自检用例就钉死这一点）。
+const { AsyncLocalStorage } = require('node:async_hooks');
+const WINTASK_LOCK = path.join(os.tmpdir(), 'lanbook-wintask.lock');
+const wintaskHeld = new AsyncLocalStorage();
+let wintaskTail = Promise.resolve();
+
+async function withWindowsTaskLock(fn, { timeout = 240000, stale = 120000 } = {}) {
+  if (process.platform !== 'win32') return fn(); // 计划任务仅 Windows
+  if (wintaskHeld.getStore()) return fn(); // 嵌套调用：已持锁，直接执行
+
+  // 进程内排队：把本次调用接到队尾，保证同进程的并发用例串行
+  const prev = wintaskTail;
+  let release;
+  wintaskTail = new Promise(r => { release = r; });
+  await prev;
+  try {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      try {
+        fs.mkdirSync(WINTASK_LOCK);
+        break;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+        // 陈旧锁自愈：持锁进程被强杀（Ctrl+C / 超时）时锁会留下
+        try {
+          if (Date.now() - fs.statSync(WINTASK_LOCK).mtimeMs > stale) {
+            fs.rmdirSync(WINTASK_LOCK);
+            continue;
+          }
+        } catch { /* 锁刚被释放/抢占，下一轮重试 */ }
+        if (Date.now() > deadline) {
+          throw new Error(`等待 Windows 计划任务锁超时：${WINTASK_LOCK}`);
+        }
+        await sleep(250);
+      }
+    }
+    try {
+      // 在 store 里执行：其内部的嵌套调用据此判定为「已持锁」
+      return await wintaskHeld.run(true, fn);
+    } finally { try { fs.rmdirSync(WINTASK_LOCK); } catch {} }
+  } finally {
+    release();
+  }
+}
+
+module.exports = { mkTempDir, makeInstallDir, removeInstallDir, snapshotDir, freePort, startServer, sleep, REPO_ROOT, withWindowsTaskLock };

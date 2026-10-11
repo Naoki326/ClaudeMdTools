@@ -14,20 +14,23 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { freePort, sleep, REPO_ROOT } = require('./helpers');
+const { freePort, sleep, REPO_ROOT, withWindowsTaskLock } = require('./helpers');
 
 const WIN_CMD = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
 
 // 生成守护脚本：隔离数据目录 + 隔离任务名，注册后立刻删任务，绝不碰用户真实任务
-function makeGuardianScript(port) {
+// 注册/删除是机器级全局操作，故整段包在 withWindowsTaskLock 里（见 helpers.js）
+async function makeGuardianScript(port) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanbook-guardian-'));
   fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port, host: '127.0.0.1' }), 'utf-8');
   fs.writeFileSync(path.join(dataDir, 'knowledge.config.json'), JSON.stringify({ roots: [] }), 'utf-8');
   const taskName = `lanbook-guardian-${process.pid}-${Date.now()}`;
   const env = { ...process.env, LANBOOK_HOME: dataDir, LANBOOK_AUTOSTART_TASK: taskName };
-  spawnSync(process.execPath, [path.join(REPO_ROOT, 'bin', 'lanbook.js'), 'autostart'],
-    { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
-  spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { encoding: 'utf-8', windowsHide: true });
+  await withWindowsTaskLock(async () => {
+    spawnSync(process.execPath, [path.join(REPO_ROOT, 'bin', 'lanbook.js'), 'autostart'],
+      { env, encoding: 'utf-8', timeout: 120000, windowsHide: true });
+    spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], { encoding: 'utf-8', windowsHide: true });
+  });
   return {
     dataDir,
     env,
@@ -50,7 +53,7 @@ function killPort(port) {
 test('守护脚本：端口已被占用时只记一行待命，不刷屏', async t => {
   if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
   const port = await freePort();
-  const g = makeGuardianScript(port);
+  const g = await makeGuardianScript(port);
   t.after(() => {
     killPort(port);
     try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
@@ -92,7 +95,7 @@ test('守护脚本：端口已被占用时只记一行待命，不刷屏', async
 test('守护脚本：端口空闲时仍能拉起服务（崩溃自愈不失效）', async t => {
   if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
   const port = await freePort();
-  const g = makeGuardianScript(port);
+  const g = await makeGuardianScript(port);
   t.after(() => {
     killPort(port);
     try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
@@ -121,8 +124,9 @@ test('守护脚本：端口空闲时仍能拉起服务（崩溃自愈不失效�
 
 test('autostart --remove 清理待命标记（重新注册不留残留状态）', async t => {
   if (process.platform !== 'win32') return t.skip('仅 Windows');
+  await withWindowsTaskLock(async () => {
   const port = await freePort();
-  const g = makeGuardianScript(port);
+  const g = await makeGuardianScript(port);
   t.after(() => { try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {} });
 
   // 造一个待命标记，模拟守护曾处于待命
@@ -138,12 +142,17 @@ test('autostart --remove 清理待命标记（重新注册不留残留状态）'
   assert.equal(r.status, 0, `--remove 应成功退出\n${r.stderr}`);
   assert.ok(!fs.existsSync(busyFlag), '--remove 应一并删除待命标记');
   assert.ok(!fs.existsSync(g.cmdPath), '--remove 应删除守护脚本');
+  });
 });
 
+// 注册 → 删数据目录 → --prune → 校验，整段必须在同一把锁里：
+// 中间任何一次「另一安装的注册」都会顺手清掉我们刚造的孤儿，
+// 导致 --prune 只能报「未发现残留」（实测确定性复现）。
 test('autostart --prune：数据目录被删后清掉孤儿任务（登录弹「无法找到脚本文件」的根因）', async t => {
   if (process.platform !== 'win32') return t.skip('仅 Windows');
+  await withWindowsTaskLock(async () => {
   const port = await freePort();
-  const g = makeGuardianScript(port);
+  const g = await makeGuardianScript(port);
 
   // makeGuardianScript 注册后已删任务，重新注册一个并保留（模拟真实安装）
   const taskName = `lanbook-prune-${process.pid}-${Date.now()}`;
@@ -170,12 +179,14 @@ test('autostart --prune：数据目录被删后清掉孤儿任务（登录弹「
 
   const q1 = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf-8', windowsHide: true });
   assert.notEqual(q1.status, 0, '孤儿任务应已被删除');
+  });
 });
 
 test('autostart --prune：目标健在的任务不得误删', async t => {
   if (process.platform !== 'win32') return t.skip('仅 Windows');
+  await withWindowsTaskLock(async () => {
   const port = await freePort();
-  const g = makeGuardianScript(port);
+  const g = await makeGuardianScript(port);
   const taskName = `lanbook-prune-keep-${process.pid}-${Date.now()}`;
   const env = { ...process.env, LANBOOK_HOME: g.dataDir, LANBOOK_AUTOSTART_TASK: taskName };
   const cli = path.join(REPO_ROOT, 'bin', 'lanbook.js');
@@ -191,6 +202,7 @@ test('autostart --prune：目标健在的任务不得误删', async t => {
   assert.equal(r.status, 0, `--prune 应成功退出\n${r.stderr}`);
   const q = spawnSync('schtasks', ['/Query', '/TN', taskName], { encoding: 'utf-8', windowsHide: true });
   assert.equal(q.status, 0, '目标健在的任务必须保留');
+  });
 });
 
 test('autostart --remove 与 --prune 互斥', async () => {
@@ -198,4 +210,17 @@ test('autostart --remove 与 --prune 互斥', async () => {
     { encoding: 'utf-8', timeout: 60000, windowsHide: true });
   assert.notEqual(r.status, 0, '互斥参数应报错退出');
   assert.match(r.stderr + r.stdout, /不能同时使用/);
+});
+
+// 锁本身的自检：确保串行化工具按预期工作（否则上面的用例会静默失去保护）
+test('withWindowsTaskLock：同一时刻只有一个持有者', async () => {
+  let inCritical = 0, maxConcurrent = 0;
+  const worker = () => withWindowsTaskLock(async () => {
+    inCritical++;
+    maxConcurrent = Math.max(maxConcurrent, inCritical);
+    await sleep(60);
+    inCritical--;
+  });
+  await Promise.all([worker(), worker(), worker()]);
+  assert.equal(maxConcurrent, 1, '临界区不得并发进入');
 });
