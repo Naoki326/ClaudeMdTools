@@ -191,6 +191,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 
 /* iframe 课程展示 */
 .course-frame { flex: 1; border: none; width: 100%; background: #fff; }
+/* 阅读区（.markdown-view / 课程 iframe）是键盘焦点落点，见 focusReadingPane；
+   焦点框会干扰阅读，且用户按 j/k 的意图是滚动而非看到焦点环，故隐去 */
+.markdown-view:focus, .markdown-view:focus-visible,
+.course-frame:focus, .course-frame:focus-visible { outline: none; }
 
 /* 通知 */
 .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg-secondary); border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; animation: slideIn 0.3s ease; }
@@ -633,7 +637,8 @@ async function loadFile(key, fromHistory) {
     const pane = document.getElementById('toc-pane');
     if (pane) { pane.innerHTML = ''; pane.classList.add('hidden'); }
   } else {
-    content.innerHTML = `<div class="markdown-view"><div class="markdown-body">${marked.parse(displayContent)}</div><div class="toc-pane" id="toc-pane"></div></div>`;
+    // tabindex="-1"：让正文容器可编程聚焦，成为阅读区的键盘焦点落点（见 focusReadingPane）
+    content.innerHTML = `<div class="markdown-view" tabindex="-1"><div class="markdown-body">${marked.parse(displayContent)}</div><div class="toc-pane" id="toc-pane"></div></div>`;
     // 渲染 mermaid 图表（若文档中有）
     if (window.mermaid && content.querySelector('.mermaid')) {
       try { mermaid.run({ nodes: content.querySelectorAll('.mermaid') }); } catch {}
@@ -655,6 +660,27 @@ async function loadFile(key, fromHistory) {
   // 确保当前文件所在路径展开（刷新/直接打开链接时也能定位到该文件）
   expandToCurrentFile(key);
   loadFileList();
+  focusReadingPane();
+}
+
+// 把键盘焦点交给正文阅读区。
+//
+// 背景：正文滚动发生在内层容器里（body overflow:hidden；md 是 .markdown-view，
+// HTML 是 iframe 内部文档），而侧边栏 #file-list 本身也是 overflow:auto 的滚动容器。
+// Vimium C 等扩展执行 j/k 时，会从「最近一次真实点击的元素」出发向上找第一个可滚动
+// 祖先——用户点侧边栏打开文档后，第一步就命中 #file-list，于是 j/k 滚的是侧边栏、
+// 正文纹丝不动；只有鼠标点一下正文、锚点落到正文里才恢复正常。
+// 打开文档后主动把焦点移到正文容器，等价于替用户完成「点一下正文」这一步。
+function focusReadingPane() {
+  if (isEditing) return; // 编辑模式：焦点属于 textarea，不能抢
+  // 对话框输入框、其它可编辑元素正在使用时也不能抢（如文件热更新触发的重载）
+  const active = document.activeElement;
+  if (active && active !== document.body && active !== document.documentElement &&
+      (active.closest('.dialog-overlay') || active.matches('input, textarea, select, [contenteditable]'))) return;
+  const content = document.getElementById('content');
+  const view = content.querySelector('.markdown-view') || content.querySelector('#course-frame');
+  if (!view) return;
+  try { view.focus({ preventScroll: true }); } catch { view.focus(); }
 }
 
 // 编辑模式
@@ -1144,6 +1170,7 @@ function openCourse(wsId, kind, file, fromHistory) {
 
   document.getElementById('content').innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(src)}"></iframe>`;
   loadCourseList();
+  focusReadingPane();
 }
 
 function openCourseInNewTab() {
