@@ -549,29 +549,42 @@ app.post('/api/knowledge/config', (req, res) => {
   res.json({ message: 'ok' });
 });
 
-// POST /api/knowledge/preview - 预览每个 root 发现的文档（.md/.html）数量和项目
+// POST /api/knowledge/preview - 预览每个 root 发现的文档（.md/.html）数量和项目。
+// 规模防御（工单 #8）：响应逐根携带文档密度信息（totalFiles / density）与低占比
+// 告警字段（lowDocDensity）——「把 7.8 万文件的原代码树加进来只为了 18 个文档」
+// 在添加前就被看见。新增字段全部增量，既有字段（root/exists/docCount/projects）
+// 形状不变，现有前端零改动。
 app.post('/api/knowledge/preview', (req, res) => {
   const { roots, excludeDirs } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
   const excludedSet = knowledge.getExcludedSet(excludeDirs);
   const result = roots.map(root => {
     const rootPath = resolveRoot(String(root));
-    if (!fs.existsSync(rootPath)) return { root, exists: false, docCount: 0, projects: [] };
+    if (!fs.existsSync(rootPath)) {
+      return { root, exists: false, docCount: 0, projects: [], totalFiles: 0, density: null, lowDocDensity: false };
+    }
     const files = [];
-    knowledge.scanKnowledgeFiles(rootPath, rootPath, files, excludedSet);
+    const stats = { totalFiles: 0 };
+    knowledge.scanKnowledgeFiles(rootPath, rootPath, files, excludedSet, stats);
     const projSet = new Set();
     files.forEach(f => {
       const s = f.rel.split('/');
       projSet.add(s.length === 1 ? path.basename(rootPath) : s[0]);
     });
-    return { root, exists: true, docCount: files.length, projects: [...projSet].sort() };
+    const docCount = files.length;
+    return {
+      root, exists: true, docCount, projects: [...projSet].sort(),
+      totalFiles: stats.totalFiles,
+      density: stats.totalFiles > 0 ? docCount / stats.totalFiles : null,
+      lowDocDensity: knowledge.isLowDocDensity(docCount, stats.totalFiles),
+    };
   });
   res.json({ preview: result });
 });
 
 // GET /api/knowledge/view - 返回渲染好的 HTML 页面（用于新标签页打开）
 // .md 走 Markdown 渲染；.html 直接返回原始文件（保持原样展示）
-app.get('/api/knowledge/view', (req, res) => {
+app.get('/api/knowledge/view', async (req, res) => {
   const { root, path: relPath } = req.query;
   const abs = knowledge.resolvePath(root, relPath);
   if (!abs) return res.status(400).send('无效路径');
@@ -585,11 +598,10 @@ app.get('/api/knowledge/view', (req, res) => {
     }
     // Markdown：剥离 YAML frontmatter（避免被 marked 误渲染成标题/正文）
     const mdContent = knowledge.stripFrontmatter(content);
-    // 收集当前 root 下所有文档路径，供前端链接跳转回退查找
+    // 同根全部文档路径（供前端链接跳转回退查找）：由树缓存提供（工单 #8），
+    // 查看一篇文档不再触发整个根目录的重扫
     const rootPath = resolveRoot(String(root));
-    const allFiles = [];
-    knowledge.scanKnowledgeFiles(rootPath, rootPath, allFiles);
-    const fileSet = allFiles.map(f => f.rel);
+    const fileSet = await knowledge.rootDocPaths(root);
     const title = knowledge.titleFromMarkdown(mdContent) || path.basename(relPath);
     // 目录数据（h2~h6）——仅作为服务端标记，实际 TOC 由客户端基于 DOM 构建（slug 规则与 index.html 完全一致）
     const toc = knowledge.tocFromMarkdown(mdContent);
