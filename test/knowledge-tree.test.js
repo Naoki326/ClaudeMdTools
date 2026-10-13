@@ -2,6 +2,9 @@
 // /api/knowledge 树扫描的标题缓存（scanTree titleCache）回归：
 // 1) 首次扫描提取标题；2) mtime 未变 → 复用缓存（标题稳定）；
 // 3) 文件更新（mtime 变）→ 缓存失效，重读全文刷新标题。
+// 工单 #6 起树级缓存接管整树快照：文档变更经监听器失效管道生效
+// （awaitWriteFinish 300ms + 立即失效），到达的请求按需异步重建——
+// 所以更新后需等失效管道落地，再断言下一次请求反映变化。
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,9 +47,12 @@ test('/api/knowledge 标题缓存：mtime 未变复用，文件更新后刷新',
   // 未改动：缓存命中，标题稳定
   assert.equal(findTitle((await getTree()).roots, 'note.md'), '旧标题', 'mtime 未变应复用缓存');
 
-  // 文件更新（mtime 变）→ 缓存失效，重读刷新
+  // 文件更新（mtime 变）→ 缓存失效，重读刷新。
+  // 树级缓存语义（工单 #6）：变更经监听器失效管道生效（awaitWriteFinish
+  // 300ms 起步），等待宽松上限后断言下一次请求反映变化。
   await sleep(50); // 保证与上次 stat 的 mtime 不同
   fs.writeFileSync(note, '# 新标题\n', 'utf-8');
+  await sleep(1000); // awaitWriteFinish(300ms) + 失效传播 + 重建，宽松上限
   assert.equal(findTitle((await getTree()).roots, 'note.md'), '新标题', 'mtime 变化后应重读文件刷新标题');
 
   await srv.stop();

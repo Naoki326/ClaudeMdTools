@@ -525,8 +525,9 @@ const knowledge = createKnowledgeService({
 });
 
 // GET /api/knowledge - 列出知识库文档（树形结构：root 顶层 + 目录树）
-app.get('/api/knowledge', (req, res) => {
-  try { res.json({ roots: knowledge.discover() }); }
+// discover 命中树级缓存直接回快照；未命中时 single-flight 异步重建（工单 #6）
+app.get('/api/knowledge', async (req, res) => {
+  try { res.json({ roots: await knowledge.discover() }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -543,6 +544,8 @@ app.post('/api/knowledge/config', (req, res) => {
   }
   knowledge.writeConfig(config);
   knowledge.refreshWatcher();
+  // 树级缓存跟随配置（工单 #6）：立即失效 + 后台重建，改配置无需重启即生效
+  knowledge.refreshTreeCache();
   res.json({ message: 'ok' });
 });
 
@@ -727,9 +730,9 @@ app.put('/api/knowledge/file', (req, res) => {
 //   GET /kb/weldone/README.md
 //   GET /kb/weldone/openspec/specs/xxx/spec.md
 
-app.get('/kb', (req, res) => {
+app.get('/kb', async (req, res) => {
   try {
-    const roots = knowledge.discover();
+    const roots = await knowledge.discover();
     const lines = [];
     function walkTree(nodes, prefix) {
       for (const n of nodes) {
@@ -744,14 +747,14 @@ app.get('/kb', (req, res) => {
   } catch (err) { res.status(500).send(err.message); }
 });
 
-app.use('/kb/', (req, res, next) => {
+app.use('/kb/', async (req, res, next) => {
   try {
     const rel = decodeURIComponent(req.path).replace(/^\/+/, ''); // 去掉开头斜杠
     if (!rel) { res.status(404).send('需要指定路径: /kb/<project> 或 /kb/<project>/<path>'); return; }
     const slashIdx = rel.indexOf('/');
     if (slashIdx === -1) {
       // /kb/<project> -> 列出该项目下所有文件路径
-      const roots = knowledge.discover();
+      const roots = await knowledge.discover();
       const root = roots.find(r => r.name === rel);
       if (!root) { res.status(404).send('项目不存在: ' + rel); return; }
       const lines = [];
@@ -770,7 +773,7 @@ app.use('/kb/', (req, res, next) => {
     // /kb/<project>/<path...> -> 返回 .md 原文
     const projectName = rel.slice(0, slashIdx);
     const filePath = rel.slice(slashIdx + 1);
-    const roots = knowledge.discover();
+    const roots = await knowledge.discover();
     const root = roots.find(r => r.name === projectName);
     if (!root) { res.status(404).send('项目不存在: ' + projectName); return; }
     const abs = knowledge.resolvePath(root.path, filePath);
