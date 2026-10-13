@@ -340,7 +340,8 @@ test('lanbook autostart：注册登录自启任务，--remove 卸载（Windows�
   const cmdContent = fs.readFileSync(path.join(dataDir, 'autostart-task.cmd'), 'utf8');
   assert.ok(cmdContent.includes(':loop'), '守护脚本应含 :loop 崩溃重启循环');
   assert.ok(cmdContent.includes('.service-stopped'), '守护脚本应检测停止标记');
-  assert.ok(cmdContent.includes('timeout /t 3'), '守护脚本崩溃后应等待 3 秒重启');
+  assert.ok(cmdContent.includes('ping -n 4 127.0.0.1 >nul'), '守护脚本崩溃后应 ping 等待 ~3 秒重启');
+  assert.ok(!cmdContent.includes('timeout /t'), '守护脚本不得残留 timeout /t（隐藏窗口下立即返回，节流失效）');
 
   // 解锁触发器：任务 XML 应含 SessionStateChangeTrigger/SessionUnlock
   const qXml = spawnSync('schtasks', ['/Query', '/TN', taskName, '/XML'], { encoding: 'utf8', windowsHide: true });

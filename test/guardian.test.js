@@ -35,8 +35,36 @@ async function makeGuardianScript(port) {
     dataDir,
     env,
     cmdPath: path.join(dataDir, 'autostart-task.cmd'),
+    vbsPath: path.join(dataDir, 'autostart.vbs'),
     logPath: path.join(dataDir, 'logs', 'service.log'),
   };
+}
+
+// 按「生产启动路径」拉起守护：wscript 执行注册产物 vbs（Run "...", 0, False：
+// 隐藏窗口、不等待）。旧用例直接 `cmd /c` 直跑——那有控制台 stdin，节流原语
+// 行为正常，复现不了隐藏窗口下的现场。
+function launchGuardianViaWscript(g) {
+  const wscript = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe');
+  return spawn(wscript, [g.vbsPath], { windowsHide: true, stdio: 'ignore', env: g.env });
+}
+
+// 停掉 wscript 拉起的守护：vbs 的 Run False 不等待，wscript 写完启动指令即退出，
+// 守护 cmd 是孤儿进程（不在任何测试进程树里）。按命令行里的数据目录名
+// （lanbook-guardian-<pid>-<ts>，全局唯一）找到守护 cmd，taskkill /T 连 node
+// 子进程一起杀。双保险：杀前先写停止标记——即使 taskkill 未命中，守护也会在
+// 下一轮循环顶部自退，不会复活服务。
+function stopGuardian(dataDir) {
+  try {
+    fs.writeFileSync(path.join(dataDir, '.service-stopped'), String(Date.now()), 'utf-8');
+  } catch {}
+  const frag = path.basename(dataDir);
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | `
+    + `Where-Object { $_.CommandLine -like '*${frag}*' } | Select-Object -ExpandProperty ProcessId`;
+  const found = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps],
+    { encoding: 'utf-8', windowsHide: true, timeout: 60000 });
+  for (const pid of (found.stdout || '').split(/\s+/).filter(s => /^\d+$/.test(s))) {
+    spawnSync('taskkill', ['/PID', pid, '/T', '/F'], { windowsHide: true });
+  }
 }
 
 // 杀掉占用指定端口的进程（守护拉起的服务不在守护进程树里，需按端口找）
@@ -50,11 +78,22 @@ function killPort(port) {
   }
 }
 
-test('守护脚本：端口已被占用时只记一行待命，不刷屏', async t => {
+// 轮询服务是否就绪（守护拉起的服务），返回就绪时刻 Date.now()，超时返回 null
+async function waitUntilUp(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { if ((await fetch(`http://127.0.0.1:${port}/api/knowledge`)).ok) return Date.now(); } catch {}
+    if (Date.now() > deadline) return null;
+    await sleep(200);
+  }
+}
+
+test('守护脚本：端口已被占用时只记一行待命，不刷屏（wscript 隐藏窗口生产路径）', async t => {
   if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
   const port = await freePort();
   const g = await makeGuardianScript(port);
   t.after(() => {
+    stopGuardian(g.dataDir);
     killPort(port);
     try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
   });
@@ -66,11 +105,8 @@ test('守护脚本：端口已被占用时只记一行待命，不刷屏', async
   t.after(() => { try { holder.kill(); } catch {} });
   await sleep(1500);
 
-  // 跑守护脚本观察 9 秒：旧实现会在此期间刷出约 3 行「被占用」
-  const guardian = spawn(WIN_CMD, ['/c', g.cmdPath], { windowsHide: true, stdio: 'ignore', env: g.env });
-  t.after(() => {
-    try { spawnSync('taskkill', ['/PID', String(guardian.pid), '/T', '/F'], { windowsHide: true }); } catch {}
-  });
+  // 生产启动路径拉起守护（隐藏窗口），观察 9 秒
+  launchGuardianViaWscript(g);
   await sleep(9000);
 
   const log = fs.existsSync(g.logPath) ? fs.readFileSync(g.logPath, 'utf-8') : '';
@@ -78,6 +114,7 @@ test('守护脚本：端口已被占用时只记一行待命，不刷屏', async
   const busyErr = log.split('\n').filter(l => l.includes('被占用')).length;
 
   assert.equal(busyErr, 0, `端口在监听时不应去拉服务（否则刷「被占用」），日志:\n${log}`);
+  assert.ok(!fs.existsSync(g.logPath), '待命分支不应拉起服务：service.log 不应产生（零增长）');
   assert.ok(fs.existsSync(busyFlag), '应写下待命标记以抑制重复提示');
 
   // 诊断信息写在标记文件里，而不是 service.log：
@@ -120,6 +157,44 @@ test('守护脚本：端口空闲时仍能拉起服务（崩溃自愈不失效�
   assert.ok(!log.includes('[standby]'), `端口空闲时不应误判待命，日志:\n${log}`);
   assert.ok(!fs.existsSync(path.join(g.dataDir, '.service-busy')),
     '端口空闲拉起服务后不应留下待命标记');
+});
+
+test('守护脚本：服务被杀后 ~3 秒节流内恰好一次重新拉起（崩溃自愈节律）', async t => {
+  if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+  const port = await freePort();
+  const g = await makeGuardianScript(port);
+  t.after(() => {
+    stopGuardian(g.dataDir);
+    killPort(port);
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  // 生产启动路径拉起守护，等第一次拉起成功
+  launchGuardianViaWscript(g);
+  const firstUp = await waitUntilUp(port, 20000);
+  assert.ok(firstUp, '守护应先拉起服务');
+  const logText = () => (fs.existsSync(g.logPath) ? fs.readFileSync(g.logPath, 'utf-8') : '');
+  const bannerCount = () => (logText().match(/已启动/g) || []).length;
+  const bannersBefore = bannerCount();
+
+  // 杀掉服务（守护拉起的服务不在守护进程树里，按端口找）
+  const t0 = Date.now();
+  killPort(port);
+
+  // 重启基线 3 秒（ping -n 4）：服务应在数秒内回来。节流失效（旧睡眠原语在
+  // 隐藏窗口下 65ms 即返）时 <1 秒即回，判红；上限放宽到 8 秒是给 node 启动
+  // 时间留余量——守护的契约是「~3 秒节流后尝试拉起」，不含服务自身启动耗时。
+  const backUp = await waitUntilUp(port, 10000);
+  assert.ok(backUp, '服务被杀后应被守护重新拉起');
+  const elapsed = backUp - t0;
+  assert.ok(elapsed >= 2500, `重启应被节流到 ~3 秒，实测 ${elapsed}ms（节流失效时 <1s）`);
+  assert.ok(elapsed <= 8000, `重启应在数秒内完成，实测 ${elapsed}ms`);
+
+  // 恰好一次重新拉起：再观察 4 秒，启动 banner 只新增一个，不得反复尝试
+  await sleep(4000);
+  const bannersAfter = bannerCount();
+  assert.equal(bannersAfter, bannersBefore + 1,
+    `应恰好重新拉起一次（banner ${bannersBefore} → ${bannersAfter}），日志:\n${logText()}`);
 });
 
 test('autostart --remove 清理待命标记（重新注册不留残留状态）', async t => {

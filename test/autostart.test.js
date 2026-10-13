@@ -209,6 +209,48 @@ test('registerAutostart(win32)：生成 vbs/cmd 守护包装 + PowerShell 注册
   assert.ok(sawCall(run, 'schtasks', '/Query', '/TN', 'lanbook-autostart'), '注册后应查询校验');
 });
 
+// 守护节流与端口探测的生成物契约（守护风暴加固）：
+// 隐藏 wscript 窗口（生产启动路径）没有可用的控制台 stdin，`timeout /t` 实测
+// 65ms 即返——待命/重启节流失效，守护循环空转。睡眠原语换成不依赖控制台
+// stdin 的 ping（本机实测：-n 4 ≈ 3s，-n 31 ≈ 30s）。
+test('registerAutostart(win32)：守护睡眠用 ping + 端口探测两段式，既有约束不变', () => {
+  const base = mkTempDir('lanbook-as-win-ping-');
+  t_cleanup(base);
+  const dataDir = path.join(base, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ port: 17177, host: '127.0.0.1' }), 'utf-8');
+  const run = fakeRun();
+  registerAutostart({ dataDir, serverJs: SERVER_JS, platform: 'win32', run });
+
+  const cmd = fs.readFileSync(path.join(dataDir, 'autostart-task.cmd'), 'utf-8');
+  // 睡眠原语：ping -n (秒+1) 127.0.0.1 >nul
+  assert.ok(cmd.includes('ping -n 31 127.0.0.1 >nul'), '待命分支应 ping -n 31（~30 秒一轮）');
+  assert.ok(cmd.includes('ping -n 4 127.0.0.1 >nul'), '崩溃重启应 ping -n 4（基线 3 秒）');
+  assert.doesNotMatch(cmd, /timeout \/t/i, '不得残留 timeout /t（隐藏窗口下 65ms 即返，节流失效）');
+
+  // 端口探测：管道两段式（先 LISTENING 后端口，纯字面量匹配）。
+  // 定位是加固而非根因修复：单段 findstr 正则经真实 cmd.exe 验证可用；
+  // 两段纯字面量消除 findstr 正则解析的脆弱性。端口带尾随空格防前缀误匹配。
+  assert.ok(
+    cmd.includes('netstat -ano -p tcp | findstr /c:"LISTENING" | findstr /c:":17177 " >nul 2>&1'),
+    '端口探测应为两段式管道（LISTENING → 端口）',
+  );
+  assert.doesNotMatch(cmd, /findstr \/r/, '不得残留 findstr 正则单段式探测');
+
+  // 既有约束不变
+  assert.ok(cmd.includes('set "PORT="'), '启动前应清空外部 PORT（防宿主环境渗透）');
+  assert.ok(cmd.includes('[standby] port 17177'), '待命提示（busyFlag 诊断信息）应保留');
+  assert.ok(cmd.includes('.service-stopped'), '停止标记检测应保留');
+  assert.match(cmd, /^[\x00-\x7F]*$/, '生成物必须纯 ASCII（cmd / wscript 对非 ASCII 编码敏感）');
+
+  // 注册参数零变化（电池策略 + 登录触发 + 描述签名；解锁触发器由注册后的 XML 合并追加）
+  const ps = run.calls.find(c => c.cmd === 'powershell.exe' && c.args[3].includes('Register-ScheduledTask'));
+  assert.ok(ps, '前置：应经 powershell 注册计划任务');
+  assert.ok(ps.args[3].includes('-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries'), '电池策略零变化');
+  assert.ok(ps.args[3].includes('-AtLogOn'), '登录触发零变化');
+  assert.ok(ps.args[3].includes(TASK_MARKER), '描述签名零变化');
+});
+
 test('registerAutostart：未知平台报错', () => {
   assert.throws(
     () => registerAutostart({ dataDir: '/tmp/x', serverJs: SERVER_JS, platform: 'freebsd', run: fakeRun() }),
