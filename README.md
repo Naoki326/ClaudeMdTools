@@ -264,7 +264,7 @@ lanbook autostart         # 装成全局的话
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | 注册产物 | 计划任务（登录 + 解锁双触发）+ 数据目录 VBS/CMD 守护 | launchd LaunchAgent（KeepAlive 保活） | systemd user 单元（Restart=on-failure） |
-| 崩溃自愈 | `:loop` 守护 3 秒重启 | KeepAlive 立即拉起 | 3 秒后重启（需 systemd >= 240） |
+| 崩溃自愈 | `:loop` 守护 3 秒重启（端口冲突按退出码退避） | KeepAlive 立即拉起 | 3 秒后重启（需 systemd >= 240） |
 | `lanbook stop` | 写停止标记防复活 | `launchctl bootout` | `systemctl --user stop` |
 | 下次登录 | 任务再触发 | launchd 再加载 | default.target 再拉起 |
 

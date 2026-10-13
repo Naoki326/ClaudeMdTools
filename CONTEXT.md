@@ -27,7 +27,7 @@ _Avoid_: 全局配置、应用配置
 _Avoid_: 访问地址、局域网地址
 
 **自启任务**:
-`lanbook autostart` 注册的登录自启任务，三平台原生机制（见 ADR-0005）：Windows 计划任务（登录 + 解锁触发，数据目录 VBS/CMD 守护循环）、macOS launchd LaunchAgent（KeepAlive 保活）、Linux systemd user 单元（Restart=on-failure）。任务名统一由 LANBOOK_AUTOSTART_TASK 控制。守护与服务的工作目录一律钉在数据目录（常驻进程持有的 CWD 在 win32 上会锁死该目录的 rename/delete）。`lanbook stop` 先停守护防复活（win 停止标记 / mac bootout / linux systemctl stop），下次登录自启恢复。1.3 起替代 PM2 守护。
+`lanbook autostart` 注册的登录自启任务，三平台原生机制（见 ADR-0005）：Windows 计划任务（登录 + 解锁触发，数据目录 VBS/CMD 守护循环）、macOS launchd LaunchAgent（KeepAlive 保活）、Linux systemd user 单元（Restart=on-failure）。任务名统一由 LANBOOK_AUTOSTART_TASK 控制。守护与服务的工作目录一律钉在数据目录（常驻进程持有的 CWD 在 win32 上会锁死该目录的 rename/delete）。Windows 守护与服务之间有退出码契约：端口冲突时服务以约定退出码 42 退出，守护按精确相等识别为「失败」并逐级退避（失败退避），普通崩溃仍按基线 3 秒重启；service.log 超 20 MiB 由 Windows 守护自动归档为 `.old`（日志归档，仅 Windows，见 ADR-0005 修订节）。`lanbook stop` 先停守护防复活（win 停止标记 / mac bootout / linux systemctl stop），下次登录自启恢复。1.3 起替代 PM2 守护。
 
 **残留自启任务（孤儿任务）**:
 Windows 特有：注册产物分居两处（系统侧计划任务 + 数据目录侧 autostart.vbs），数据目录先消失而任务留着时，每次登录 / 解锁弹「无法找到脚本文件」。`lanbook autostart` 注册时自动清理（认领规则：描述含 managed by lanbook，或 wscript 拉起 autostart.vbs；且目标脚本已不存在），也可 `lanbook autostart --prune` 单独清理。macOS / Linux 单产物，无此概念。

@@ -326,7 +326,7 @@ function cmdAutostart(args) {
   for (const note of result.notes || []) console.log(`  ${note}`);
   if (result.kind === 'windows') {
     console.log(`  启动包装: ${result.vbsPath}`);
-    console.log(`  守护方式: 服务崩溃后 3 秒自动重启（autostart-task.cmd 循环守护）`);
+    console.log(`  守护方式: 服务崩溃后 3 秒自动重启；端口冲突按退出码退避（3s→6s→12s 封顶 5 分钟，autostart-task.cmd 循环守护）`);
     console.log(`  立即启动一次: schtasks /Run /TN ${result.taskName}`);
     console.log(`  停止服务: lanbook stop（写入停止标记，守护循环退出，服务不复活）`);
   } else if (result.kind === 'launchd') {
@@ -340,7 +340,8 @@ function cmdAutostart(args) {
     console.log(`  立即重启服务: systemctl --user restart ${result.unitName}`);
     console.log(`  停止服务: lanbook stop（停止单元，下次登录恢复自启）`);
   }
-  console.log(`  服务日志: ${result.logPath}（追加写，过大可手动清理）`);
+  // 归档仅 Windows 守护实现（macOS/Linux 由 launchd/systemd 直接写日志），文案按平台如实标注
+  console.log(`  服务日志: ${result.logPath}（追加写${result.kind === 'windows' ? '，超 20 MiB 守护自动归档为 .old' : ''}）`);
   console.log(`  端口 / 监听地址: 数据目录 settings.json（自启场景没有 PORT 环境变量）`);
   console.log(`  卸载自启: lanbook autostart --remove`);
 }

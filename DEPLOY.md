@@ -32,7 +32,7 @@ lanbook autostart        # 注册登录自启（幂等，重复执行覆盖旧�
 ```
 Windows  计划任务 lanbook-autostart（登录 + 解锁触发，无需管理员，WorkingDirectory=数据目录）
   → wscript  <数据目录>/autostart.vbs        （隐藏窗口，无黑框）
-    → cmd      <数据目录>/autostart-task.cmd （守护循环：崩溃 3 秒重启；CWD 钉在数据目录；stdout/stderr 重定向）
+    → cmd      <数据目录>/autostart-task.cmd （守护循环：崩溃 3 秒重启，端口冲突按退出码退避；CWD 钉在数据目录；stdout/stderr 重定向）
       → node   <包目录>/server.js            （启动即 chdir 数据目录）
 
 macOS    launchd LaunchAgent ~/Library/LaunchAgents/lanbook-autostart.plist
@@ -51,7 +51,7 @@ Windows 上表现为「那个目录无法 rename/delete」（例如从某个包�
 | 任务名 / Label / 单元 | `lanbook-autostart`（`LANBOOK_AUTOSTART_TASK` 可覆盖） |
 | 触发 | 当前用户登录（Windows 额外含工作站解锁触发；macOS KeepAlive 覆盖唤醒场景） |
 | 端口 / host | 数据目录 `settings.json`（自启场景没有 `PORT` 环境变量，settings 说了算） |
-| 日志 | `~/.lanbook/logs/service.log`（追加写，过大手动清理） |
+| 日志 | `~/.lanbook/logs/service.log`（追加写；Windows 守护超 20 MiB 自动归档为 `.old`） |
 | 注册产物 | Windows: VBS + CMD 包装脚本；macOS: plist；Linux: unit 文件（注册时生成，`--remove` 时删除） |
 
 配套命令：

@@ -299,3 +299,150 @@ test('withWindowsTaskLock：同一时刻只有一个持有者', async () => {
   await Promise.all([worker(), worker(), worker()]);
   assert.equal(maxConcurrent, 1, '临界区不得并发进入');
 });
+
+// ---------- 工单 #4：失败退避 + 退出码契约 + 日志归档 ----------
+//
+// 为什么用「假服务」而不是真服务去撞 EADDRINUSE：守护拉起前会探端口（前票的
+// 节流/探测），端口被占时根本不会拉起（转待命）——真服务没有「每次启动都撞
+// 端口」的确定性入口。而本票被测对象是**守护对退出码的解释**，所以让真实生成
+// 的 cmd 拉起一个「立即以指定退出码退出的假服务」，即可沿生产路径全链路验证：
+// wscript 隐藏窗口启动 + 真实端口探测 + 真实日志追加 + 真实退避节律。
+// 服务侧（真 EADDRINUSE → 退出码 42）由 test/port-conflict.test.js 钉住。
+
+// 生成假服务脚本写入数据目录，并把守护 cmd 启动行里的 server.js 绝对路径
+// 替换成假服务路径——守护脚本的其余内容保持生产原样
+function writeFakeServer(g, { exitCode, conflictLine }) {
+  const script = path.join(g.dataDir, 'fake-server.js');
+  const lines = [
+    `'use strict';`,
+    `// guardian-behavior test fake: exercises the cmd exit-code contract`,
+    `console.log('[fake-launch] pid=' + process.pid);`,
+  ];
+  if (conflictLine) lines.push(`console.error(${JSON.stringify(conflictLine)});`);
+  lines.push(`process.exit(${exitCode});`);
+  fs.writeFileSync(script, lines.join('\n'), 'utf-8');
+  const real = path.join(REPO_ROOT, 'server.js');
+  const cmd = fs.readFileSync(g.cmdPath, 'utf-8');
+  assert.ok(cmd.includes(`"${real}"`), '生成的守护脚本应含 server.js 绝对路径（替换前提）');
+  fs.writeFileSync(g.cmdPath, cmd.replace(`"${real}"`, `"${script}"`), 'utf-8');
+  return script;
+}
+
+// 轮询 service.log 统计 [fake-launch] 行数，记录每一次新增的墙钟时刻
+//（用于断言重启间隔）。等到 count 次或超时为止，返回时刻数组（相对 ms）。
+async function collectLaunchTimes(logPath, count, timeoutMs) {
+  const times = [];
+  const deadline = Date.now() + timeoutMs;
+  let seen = 0;
+  while (Date.now() < deadline) {
+    const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : '';
+    const n = text.split('[fake-launch]').length - 1;
+    while (times.length < n) times.push(Date.now());
+    if (count && times.length >= count) break;
+    if (n < seen) break; // 日志被归档清零（不该发生在本组用例）即停
+    seen = n;
+    await sleep(120);
+  }
+  const base = times.length ? times[0] : Date.now();
+  return times.map(ts => ts - base);
+}
+
+test('守护脚本：端口冲突退出码触发失败退避（10 秒窗口 ≤4 行，间隔逐级倍增）', async t => {
+  if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+  const port = await freePort();
+  const g = await makeGuardianScript(port);
+  t.after(() => {
+    stopGuardian(g.dataDir);
+    killPort(port);
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  // 假服务复刻真实冲突文案（服务侧重试耗尽后的既有文案），每次启动打一行
+  const conflictLine = `端口 ${port} 被占用，请确认是否已有 lanbook 在运行（lanbook stop 可停止）`;
+  writeFakeServer(g, { exitCode: 42, conflictLine });
+
+  launchGuardianViaWscript(g);
+  // 退避序列 3s→6s→12s：第 4 次启动约在首启后 ~22s；45s 上界留给慢机器
+  const times = await collectLaunchTimes(g.logPath, 4, 45000);
+  const log = fs.existsSync(g.logPath) ? fs.readFileSync(g.logPath, 'utf-8') : '';
+
+  assert.ok(times.length >= 4, `退避期间应持续重试（观测到 ${times.length} 次启动），日志:\n${log}`);
+
+  // AC：10 秒窗口内冲突行数 ≤ 小上界（风暴形态下为 30+）
+  const conflicts = log.split('\n').filter(l => l.includes('被占用')).length;
+  const inFirst10s = times.filter(dt => dt <= 10000).length;
+  assert.ok(inFirst10s <= 4,
+    `10 秒窗口内冲突行应 ≤4，实测 ${inFirst10s}（冲突行 ${conflicts}），启动时刻: ${JSON.stringify(times)}`);
+
+  // 重试间隔逐级退避：~3.5s → ~6.5s → ~12.5s（下界放宽到 5s/9.5s；
+  // 无退避的基线 3s 节律 gap 稳定在 ~3.5s，两个下界都会判红）
+  const gaps = times.slice(1).map((dt, i) => dt - times[i]);
+  assert.ok(gaps[0] >= 2500, `第一次重试应 ≥ ~3s 节流，实测 ${gaps[0]}ms`);
+  assert.ok(gaps[1] >= 5000, `第二次重试应退避到 ~6s，实测 ${gaps[1]}ms，全部间隔: ${JSON.stringify(gaps)}`);
+  assert.ok(gaps[2] >= 9500, `第三次重试应退避到 ~12s，实测 ${gaps[2]}ms，全部间隔: ${JSON.stringify(gaps)}`);
+});
+
+test('守护脚本：崩溃退出码（>42）不误分类为端口冲突，仍按基线 3s 重启', async t => {
+  if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+  const port = await freePort();
+  const g = await makeGuardianScript(port);
+  t.after(() => {
+    stopGuardian(g.dataDir);
+    killPort(port);
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  // 退出码 100 > 42：若守护误用 `if errorlevel 42`（≥ 语义），100 会被当成
+  // 端口冲突而逐级退避；精确相等比较下它是普通崩溃，按基线 3s 节律重启
+  writeFakeServer(g, { exitCode: 100 });
+
+  launchGuardianViaWscript(g);
+  const times = await collectLaunchTimes(g.logPath, 6, 45000);
+  const log = fs.existsSync(g.logPath) ? fs.readFileSync(g.logPath, 'utf-8') : '';
+
+  // 基线节律 6 次启动 ≈ 17.5s；若被误退避（3/6/12/24s）第 6 次要到 ~58s，观测不满
+  assert.ok(times.length >= 6,
+    `崩溃应按基线 3s 节律重启（观测到 ${times.length} 次），误退避时 45s 内不足 6 次，日志:\n${log}`);
+  const span = times[5] - times[0];
+  assert.ok(span <= 25000, `基线节律 6 次启动应 ≤25s，实测 ${span}ms，启动时刻: ${JSON.stringify(times)}`);
+  const gaps = times.slice(1).map((dt, i) => dt - times[i]);
+  assert.ok(gaps[1] <= 5500,
+    `第二次重启应仍是基线 ~3s（不得误退避到 6s），实测 ${gaps[1]}ms，全部间隔: ${JSON.stringify(gaps)}`);
+});
+
+test('守护脚本：超限 service.log 在追加前归档为 .old，日志重新从空累积', async t => {
+  if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+  const port = await freePort();
+  const g = await makeGuardianScript(port);
+  t.after(() => {
+    stopGuardian(g.dataDir);
+    killPort(port);
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+
+  writeFakeServer(g, { exitCode: 42 });
+
+  // 预置 21 MiB 超限日志：先写标记行，再稀疏截断到目标体积（不占真实磁盘）
+  const oversized = 21 * 1024 * 1024;
+  const oldLog = g.logPath + '.old';
+  fs.mkdirSync(path.dirname(g.logPath), { recursive: true });
+  fs.writeFileSync(g.logPath, 'PRESET-OVERSIZE-MARKER\n', 'utf-8');
+  fs.truncateSync(g.logPath, oversized);
+
+  launchGuardianViaWscript(g);
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(oldLog) && fs.existsSync(g.logPath)) break;
+    await sleep(200);
+  }
+
+  assert.ok(fs.existsSync(oldLog), '超限日志应在追加前被归档为 .old');
+  const oldStat = fs.statSync(oldLog);
+  assert.ok(oldStat.size >= oversized, `.old 应保有原体积，实测 ${oldStat.size}`);
+  assert.ok(fs.readFileSync(oldLog, 'utf-8').startsWith('PRESET-OVERSIZE-MARKER'),
+    '.old 应是归档的原文件（保留标记行）');
+
+  const fresh = fs.readFileSync(g.logPath, 'utf-8');
+  assert.ok(!fresh.includes('PRESET-OVERSIZE-MARKER'), '归档后 service.log 应从空重新累积');
+  assert.ok(fresh.includes('[fake-launch]'), `新日志应已开始累积服务输出:\n${fresh.slice(0, 300)}`);
+});

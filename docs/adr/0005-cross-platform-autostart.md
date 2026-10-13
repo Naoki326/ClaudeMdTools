@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 注册产物 | 计划任务 + 数据目录 VBS/CMD 包装 | `~/Library/LaunchAgents/<name>.plist` | `$XDG_CONFIG_HOME/systemd/user/<name>.service` |
 | 登录拉起 | AtLogOn 触发（+ 工作站解锁触发） | `RunAtLoad`（launchd 加载 LaunchAgents） | `WantedBy=default.target` |
-| 崩溃自愈 | CMD `:loop` 3 秒重启 + 停止标记 | `KeepAlive`（立即保活） | `Restart=on-failure` + `RestartSec=3` |
+| 崩溃自愈 | CMD `:loop` 3 秒重启（端口冲突按退出码退避）+ 停止标记 | `KeepAlive`（立即保活） | `Restart=on-failure` + `RestartSec=3` |
 | 日志 | `>> logs/service.log` | `StandardOutPath` / `StandardErrorPath` | `StandardOutput/Error=append:`（systemd ≥ 240） |
 | stop 防复活 | 写 `.service-stopped`，守护循环退出 | `launchctl bootout gui/<uid>/<name>` | `systemctl --user stop <name>` |
 | 卸载 | `Unregister-ScheduledTask` + 清附属文件 | bootout + 删 plist | `disable --now` + 删 unit + daemon-reload |
@@ -68,3 +68,23 @@ Windows 的注册产物**分居两处**：系统侧的计划任务、数据目�
 - 纯 SSH 无图形登录的 macOS 上 `launchctl bootstrap gui/<uid>` 不可用，注册时报错并提示在桌面会话中操作（不静默降级）
 - 任务描述被用作清理的认领签名（`TASK_MARKER`），故注册时必须写 `-Description`；描述保持纯 ASCII，避免区域设置差异下的乱码
 - 守护与服务的工作目录固定为数据目录（守护脚本 `cd /d` + 计划任务 `-WorkingDirectory` + 扩展/CLI spawn `cwd` + `server.js` chdir 四层，见上文）；服务内部全用绝对路径，chdir 无行为变化，仅解除 win32 上对启动者目录的 rename 锁
+
+## 修订（2026-10 · 守护风暴护栏）：节流原语、退出码契约、日志归档
+
+端口探测 + 30 秒待命（前次修订）封住了「解锁触发叠开守护」这一已知触发源，但风暴的完整候选成因（任务会话环境下探测工具不可用、多守护竞态……）并未全部复现。本修订不再赌成因，转而给「任何未知触发」建立**有界性护栏**：就算风暴机理复发，冲突行数、日志体积也全部有界，且退避时间线本身就是诊断材料。
+
+### timeout 为何失效，睡眠为何用 ping
+
+守护循环的睡眠发生在 wscript 隐藏窗口拉起的 cmd 里（生产启动路径：计划任务 → vbs `Run "...", 0, False`）。`timeout /t N` 依赖控制台 stdin——它要监听按键才能提供「按任意键跳过」；隐藏窗口没有控制台 stdin，实测 30 秒的 timeout 65ms 即返：30 秒待命变 65ms 空转、3 秒重启变连发，正是守护风暴的放大器。`ping -n N 127.0.0.1` 不碰 stdin，按秒节流（`-n` = 秒数 + 1，首 ping 即发；本机实测 `-n 4` ≈ 3s、`-n 31` ≈ 30s），无控制台环境下行为稳定。凡是依赖控制台环境的 cmd 内建（timeout、pause、choice）在自启链路里都不可信。
+
+### 守护-服务退出码契约（失败退避）
+
+服务对 `EADDRINUSE` 先做有界重试（3 次、间隔 ~1s——给「前一个实例正在优雅关闭、端口即将释放」的竞态一个自愈窗口，重试期间端口释放则直接接管），耗尽后打印既有冲突文案并以约定退出码 **42** 退出。码值定义在 `lib/exit-codes.js`：服务端（`server.js`）、守护脚本生成（`lib/autostart.js`）与测试共用一份真相；42 避开常见小错误码（如 1 = taskkill 强杀的一般失败），与 Windows 强杀退出码不撞车。
+
+守护循环对该码做**精确相等**比较（`if "%EC%"=="42"`）：命中则失败计数 +1，重启间隔 3s → 6s → 12s → … 倍增、封顶 5 分钟后重试；其它退出码一律视为「正常运行过之后的退出」，计数清零、按基线 3s 重启。不能用 `if errorlevel N` 判定——那是 ≥ 语义，会把退出码 ≥ 42 的崩溃误分类成端口冲突（这正是退出码契约要求精确相等的原因）。
+
+失败退避使任何未知触发机理即使复发也有界：冲突行最多以退避节奏出现（风暴形态实测 30+ 行/10s，护栏后 ≤4），`.old` 归档 + service.log 里的退避时间线即诊断材料。macOS 的 `KeepAlive` 与 Linux 的 `Restart=on-failure` 保持原样（零改动）：launchd / systemd 自带重启节流，不存在 cmd 循环这台「无上限放大器」，也无退出码可判——服务进程的退出码被服务管理器吞掉。
+
+### 日志归档
+
+守护循环每次追加日志前检查 `service.log` 体积（cmd 原生 `for %%F` 的 `~z` 修饰符，零依赖），超过 20 MiB 改名为 `service.log.old`（`move /y` 覆盖旧 `.old`），随后从空重新累积。归档放在守护侧、服务退出后的窗口执行：服务运行期间日志句柄被 `>>` 继承独占，只有这时改名才不会 EBUSY。实现上有一个 cmd 语法陷阱：**批处理里未定义变量的 `%VAR%` 展开为空**（不是保持字面量），日志不存在时 `%LOGSZ%` 展开成空会让 `if GTR N` 变成语法错误（"X was unexpected at this time"），整个守护脚本当场中止——所以体积变量必须先置 0 兜底，保证它永远展开为数字。

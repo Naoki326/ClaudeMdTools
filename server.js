@@ -9,6 +9,7 @@ const marked = require('marked');
 const markedKatex = require('marked-katex-extension');
 const { resolveDataDir, initDataDir } = require('./lib/data-dir');
 const { resolveListen } = require('./lib/settings');
+const { PORT_CONFLICT_EXIT_CODE, EADDRINUSE_MAX_RETRIES, EADDRINUSE_RETRY_DELAY_MS } = require('./lib/exit-codes');
 
 // marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染；
 // 同时重写图片相对路径 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
@@ -1131,17 +1132,44 @@ refreshKnowledgeWatcher();
 // 端口占用统一处理：HTTP server 与 WebSocketServer 都可能 emit 'error'。
 // 关键：new WebSocketServer({ server }) 会让端口冲突错误从 wss 实例 emit，
 // 只给 server 注册 error handler 收不到，必须 wss 也注册，否则 Unhandled error 崩溃。
+//
+// EADDRINUSE 容忍（工单 #4，退出码契约见 lib/exit-codes.js 与 ADR-0005 修订）：
+// 先做有界重试（3 次、间隔 ~1s）——给「前一个实例正在优雅关闭、端口即将释放」
+// 的竞态一个自愈窗口（重试期间端口释放则直接接管，守护不用再介入）；耗尽后
+// 打印既有冲突文案并以约定退出码退出，守护据此区分「端口冲突」（失败退避）
+// 与「正常运行过之后的退出」（基线重启）。其它错误照旧抛出。
+let eaddrinuseRetries = 0;
+let eaddrinuseRetryPending = false;
 function handleListenError(err) {
   if (err && err.code === 'EADDRINUSE') {
-    // 端口未释放（常见于常驻管理器快速重启的竞态）：以非零码退出，
-    // 由外部守护负责重试；前台运行则直接看到报错
+    // server 与 wss 会对同一次 listen 失败各 emit 一次：只让第一处进入重试，
+    // 否则一次冲突被两个 handler 放大成两轮重试
+    if (eaddrinuseRetryPending) return;
+    eaddrinuseRetryPending = true;
+    if (eaddrinuseRetries < EADDRINUSE_MAX_RETRIES) {
+      eaddrinuseRetries++;
+      setTimeout(() => {
+        eaddrinuseRetryPending = false;
+        startListening();
+      }, EADDRINUSE_RETRY_DELAY_MS);
+      return;
+    }
+    // 重试耗尽：既有文案一次 + 约定退出码（守护的失败退避依据）
     console.error(`端口 ${PORT} 被占用，请确认是否已有 lanbook 在运行（lanbook stop 可停止）`);
-    process.exit(1);
+    process.exit(PORT_CONFLICT_EXIT_CODE);
   }
   throw err;
 }
+function startListening() {
+  server.listen(PORT, HOST, () => {
+    eaddrinuseRetries = 0; // 成功监听后重置：后续冲突从全新的一轮重试开始
+    printStartupBanner(HOST, PORT);
+    console.log(`数据目录: ${DATA_DIR}`);
+  });
+}
 server.on('error', handleListenError);
 wss.on('error', handleListenError);
+startListening();
 
 // 局域网 IPv4 地址（排除回环 / 内部网卡）：横幅直接给出手机浏览器可输入的地址
 function lanIPv4Addresses() {
@@ -1170,10 +1198,8 @@ function printStartupBanner(host, port) {
   }
 }
 
-server.listen(PORT, HOST, () => {
-  printStartupBanner(HOST, PORT);
-  console.log(`数据目录: ${DATA_DIR}`);
-});
+// listen 启动统一走 startListening()（错误处理一节）：EADDRINUSE 重试时需要
+// 用同一组参数与启动回调重新 listen
 
 // 优雅关闭：收到信号时关闭所有监听器与连接，确保 TCP 端口及时释放
 // （旧进程退净再退出，避免下次启动 EADDRINUSE）
