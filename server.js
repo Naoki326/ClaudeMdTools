@@ -10,6 +10,7 @@ const markedKatex = require('marked-katex-extension');
 const { resolveDataDir, initDataDir } = require('./lib/data-dir');
 const { resolveListen } = require('./lib/settings');
 const { PORT_CONFLICT_EXIT_CODE, EADDRINUSE_MAX_RETRIES, EADDRINUSE_RETRY_DELAY_MS } = require('./lib/exit-codes');
+const { createKnowledgeService, KB_STATIC_EXTS } = require('./lib/knowledge');
 
 // marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染；
 // 同时重写图片相对路径 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
@@ -344,14 +345,14 @@ const WORKSPACE_MAX_DEPTH = 8;
 // - 排除 node_modules / .git 等常见无关目录（复用知识库排除集合）
 function findWorkspaceDirs(rootPath, excludedSet) {
   const found = [];
-  const excluded = excludedSet || getExcludedSet();
+  const excluded = excludedSet || knowledge.getExcludedSet();
   (function walk(dir, depth) {
     if (depth > WORKSPACE_MAX_DEPTH) return;
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      if (isExcluded(path.join(dir, e.name), e.name, excluded)) continue;
+      if (knowledge.isExcluded(path.join(dir, e.name), e.name, excluded)) continue;
       const full = path.join(dir, e.name);
       if (fs.existsSync(path.join(full, 'lessons'))) {
         found.push(full);
@@ -385,12 +386,6 @@ function discoverWorkspaces() {
   return workspaces;
 }
 
-// 从 HTML 内容提取 <title>
-function titleFromHtml(html) {
-  const m = html.match(/<title>([\s\S]*?)<\/title>/i);
-  return m ? m[1].trim() : null;
-}
-
 // 从 workspace 根目录的 MISSION.md 提取标题（# Mission: xxx）
 // 课程树侧边栏标题优先用它，而不是文件夹名称
 function titleFromMission(wsPath) {
@@ -418,7 +413,7 @@ function collectCourseHtml(dir, base, acc) {
         const content = fs.readFileSync(full, 'utf-8');
         acc.push({
           file: path.relative(base, full).replace(/\\/g, '/'),
-          title: titleFromHtml(content) || e.name.replace(/\.html$/i, ''),
+          title: knowledge.titleFromHtml(content) || e.name.replace(/\.html$/i, ''),
           mtime: stat.mtimeMs,
         });
       } catch {}
@@ -518,233 +513,26 @@ app.use('/teach', (req, res, next) => {
 // ============================================================
 // 和课程视图对称：配置根目录 -> 递归扫描 .md -> 按项目分组展示
 // 文件保持原位读取/编辑，不复制进 docs/
+//
+// 扫描 / 树缓存 / 监听 / 失效的实现收敛在 lib/knowledge.js（树数据的唯一
+// 真相），下面的路由 handler 只做委托。
 
-const KNOWLEDGE_CONFIG_FILE = path.join(DATA_DIR, 'knowledge.config.json');
-
-// 内置默认排除的目录名（小写匹配）
-// 注意：'docs' 不在默认列表中 -- 大多数项目的 docs/ 里有有价值的文档。
-// 如需排除特定目录，通过 knowledge.config.json 的 excludeDirs 配置。
-// lanbook 自身的 docs/ 通过 LOCAL_EXCLUDE_DIRS 按绝对路径排除，避免误伤其他项目。
-const DEFAULT_EXCLUDED = [
-  'node_modules', '.git', '.svn', 'bin', 'obj', 'dist', 'build',
-  '.next', 'coverage', '__pycache__', '.venv', 'venv', '.idea',
-  'target', 'out', 'logs', '.cache', '.vs', 'packages',
-  '.vscode', '.claude', '.husky', '.turbo', '.gradle',
-  // pi / 其它 agent 工具目录：内含瞬态任务锁文件（.pi/tasks/*.lock），
-  // 若不排除，chokidar 会监听它们并在 Windows 上触发 EPERM 崩溃
-  '.pi', '.pi-glla', '.zread',
-  // 注意：.scratch 不在此列 —— 它是 agent 草稿区，常含需频繁查阅的文档
-  // （审查报告、spec 草稿、图表产物），知识库需收录；其中的瞬态文件
-  // （.log/.png/.lock 等）由 WATCHER_TRANSIENT_PATTERNS + knowledge
-  // watcher 的文档级剪枝（ignored 回调）双重兜底，不会进监听
-];
-
-// 瞬态文件/目录名（watcher 专用）：锁文件、临时文件、Office 占用锁等。
-// 这些文件被其它进程占用/删除时，Windows 上访问会 EPERM，必须从监听中排除。
-// 注意：这些不加入 DEFAULT_EXCLUDED，避免影响扫描（扫描只看文档扩展名，天然忽略）。
-const WATCHER_TRANSIENT_PATTERNS = [
-  /\.lock$/i,        // 锁文件（pi tasks、git index.lock 等）
-  /\.tmp$/i,         // 临时文件
-  /~\$.*$/i,         // Office 占用锁（~$xxx.docx）
-  /^\.#.*$/i,       // Emacs 自动保存锁
-  /\/\.[^\/]+?\.sw[p-x]$/i, // Vim swap
-];
-
-// 按绝对路径排除的目录（源码模式下本仓库的 docs/，防止管理文档在知识库视图中重复；
-// 与 1.1 行为保持一致）
-const LOCAL_EXCLUDE_DIRS = [path.join(__dirname, 'docs')];
-
-// 构建有效排除集合：内置默认 + 配置文件中的 excludeDirs + 可选的额外目录
-function getExcludedSet(extraDirs) {
-  const config = readKnowledgeConfig();
-  const fromConfig = (config.excludeDirs || []).map(d => String(d).toLowerCase());
-  const fromArg = (extraDirs || []).map(d => String(d).toLowerCase());
-  return new Set([...DEFAULT_EXCLUDED, ...fromConfig, ...fromArg]);
-}
-
-// 判断路径是否应被排除：先查目录名黑名单，再查绝对路径黑名单
-function isExcluded(fullPath, dirName, excludedSet) {
-  const excluded = excludedSet || getExcludedSet();
-  if (dirName && excluded.has(dirName.toLowerCase())) return true;
-  const norm = path.resolve(fullPath);
-  return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
-}
-
-function readKnowledgeConfig() {
-  try {
-    if (fs.existsSync(KNOWLEDGE_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(KNOWLEDGE_CONFIG_FILE, 'utf-8'));
-    }
-  } catch {}
-  return { roots: [] };
-}
-
-function writeKnowledgeConfig(config) {
-  fs.writeFileSync(KNOWLEDGE_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
-}
-
-// 从 Markdown 内容提取标题（# 标题）
-function titleFromMarkdown(content) {
-  const m = content.match(/^#\s+(.+)$/m);
-  return m ? m[1].trim() : null;
-}
-
-// 知识库文档扩展名：.md / .html / .htm
-function isKnowledgeDoc(fileName) {
-  const n = String(fileName).toLowerCase();
-  return n.endsWith('.md') || n.endsWith('.html') || n.endsWith('.htm');
-}
-
-// 是否为 HTML 文档
-function isHtmlDoc(fileName) {
-  const n = String(fileName).toLowerCase();
-  return n.endsWith('.html') || n.endsWith('.htm');
-}
-
-// 从 HTML 提取标题：<title> 优先，其次第一个 <h1>，都无则 null
-function titleFromHtml(content) {
-  const t = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (t) { const s = t[1].replace(/<[^>]+>/g, '').trim(); if (s) return s; }
-  const h = content.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  if (h) { const s = h[1].replace(/<[^>]+>/g, '').trim(); if (s) return s; }
-  return null;
-}
-
-// 从 Markdown 提取目录（标题列表）：只取 ## ~ ######（h1 视为文档标题不入目录）
-// 返回 [{ level, text }]
-// 注意：仅用于读取文档标题信息，实际锚点 id 由渲染页客户端基于 DOM 生成（与 index.html 一致）
-function tocFromMarkdown(content) {
-  const toc = [];
-  const lines = String(content || '').split(/\r?\n/);
-  let inFence = false;
-  for (const line of lines) {
-    const fence = line.match(/^\s*(```+|~~~+)/);
-    if (fence) { inFence = !inFence; continue; }
-    if (inFence) continue;
-    const m = line.match(/^(#{2,6})\s+(.+?)\s*#*\s*$/);
-    if (!m) continue;
-    const level = m[1].length;
-    const text = m[2].replace(/\\([`*_\[\]])/g, '$1').replace(/[*_~`]/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
-    if (!text) continue;
-    toc.push({ level, text });
-  }
-  return toc;
-}
-
-// 剥离 YAML frontmatter（文件以 --- 开头的元数据块），避免被 marked 误渲染为标题
-// 严格匹配：首行必须是 --- 且存在配对 ---，否则原样返回（不误伤水平线）
-function stripFrontmatter(content) {
-  const s = String(content || '');
-  const m = s.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
-  if (!m) return s;
-  // frontmatter 内第二行通常是键值对（name:/description:/metadata:），防止把正文首行 --- 误判
-  const fmBody = m[0].replace(/^---\r?\n/, '').replace(/\r?\n---\r?\n?$/, '');
-  if (!fmBody || !/^[A-Za-z_][\w.-]*\s*:/.test(fmBody)) return s;
-  return s.slice(m[0].length);
-}
-
-// /kbfile 静态托管允许的文件类型（HTML 文档及其相对资源）
-const KB_STATIC_EXTS = ['.html', '.htm', '.css', '.js', '.mjs', '.json', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.pdf'];
-
-// 递归扫描目录下所有知识库文档（.md / .html / .htm，排除常见无关目录）
-function scanKnowledgeFiles(dir, base, acc, excludedSet) {
-  let entries = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (isExcluded(full, e.name, excludedSet)) continue;
-      scanKnowledgeFiles(full, base, acc, excludedSet);
-    } else if (e.isFile() && isKnowledgeDoc(e.name)) {
-      acc.push({ abs: full, rel: path.relative(base, full).replace(/\\/g, '/') });
-    }
-  }
-}
-
-// 文档标题缓存：abs 路径 → { mtime, title }。/api/knowledge 每次请求都会
-// 全量 scanTree，逐文档 readFileSync 提取标题是主要耗时（千级文档 × 同步 IO，
-// Windows 上秒级）；mtime 未变的文档直接复用上次标题，重复请求的 IO 从
-// 「读全文」降到「仅 stat」。
-const titleCache = new Map();
-
-// 扫描目录构建树：只保留含知识库文档（.md/.html/.htm）的分支（空文件夹自动隐藏）
-// 返回 children 数组，每个节点是 { type:'dir', name, children } 或 { type:'file', name, title, kind, mtime }
-function scanTree(dir, base, excludedSet) {
-  let entries = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
-  // 先排序：目录在前，文件在后；各自按名称排
-  entries.sort((a, b) => {
-    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
-  const children = [];
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (isExcluded(full, e.name, excludedSet)) continue;
-      const sub = scanTree(full, base, excludedSet);
-      if (sub.length > 0) children.push({ type: 'dir', name: e.name, children: sub });
-    } else if (e.isFile() && isKnowledgeDoc(e.name)) {
-      // 先 stat 拿 mtime：命中缓存（mtime 未变）则跳过全文读取
-      let mtime = 0;
-      try { mtime = fs.statSync(full).mtimeMs; } catch {}
-      const cached = titleCache.get(full);
-      let title;
-      if (cached && cached.mtime === mtime) {
-        title = cached.title;
-      } else {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          title = isHtmlDoc(e.name)
-            ? (titleFromHtml(content) || e.name.replace(/\.html?$/i, ''))
-            : (titleFromMarkdown(content) || e.name.replace(/\.md$/i, ''));
-        } catch { title = e.name.replace(/\.(md|html?)$/i, ''); }
-        titleCache.set(full, { mtime, title });
-      }
-      children.push({ type: 'file', name: e.name, title, kind: isHtmlDoc(e.name) ? 'html' : 'md', mtime });
-    }
-  }
-  return children;
-}
-
-// 发现知识库内容：以配置的 root 为顶层，下面是完整目录树
-function discoverKnowledge() {
-  const config = readKnowledgeConfig();
-  const excludedSet = getExcludedSet();
-  const roots = [];
-  (config.roots || []).forEach((root, index) => {
-    const rootPath = resolveRoot(root);
-    if (!fs.existsSync(rootPath)) return;
-    const children = scanTree(rootPath, rootPath, excludedSet);
-    if (children.length > 0) {
-      roots.push({ name: path.basename(rootPath), path: rootPath.replace(/\\/g, '/'), index, children });
-    }
-  });
-  return roots;
-}
-
-// 解析知识库文件路径（安全检查：必须在某个 root 内）
-function resolveKnowledgePath(root, relPath) {
-  if (!root || !relPath) return null;
-  const rootPath = resolveRoot(String(root));
-  const config = readKnowledgeConfig();
-  const inRoots = (config.roots || []).some(r => resolveRoot(r) === rootPath);
-  if (!inRoots) return null;
-  const abs = path.resolve(rootPath, String(relPath));
-  if (abs !== rootPath && !abs.startsWith(rootPath + path.sep)) return null;
-  if (!isKnowledgeDoc(abs)) return null;
-  return abs;
-}
+const knowledge = createKnowledgeService({
+  dataDir: DATA_DIR,
+  baseDir: __dirname,
+  resolveRoot,
+  onKnowledgeChange: event => broadcast(event),
+});
 
 // GET /api/knowledge - 列出知识库文档（树形结构：root 顶层 + 目录树）
 app.get('/api/knowledge', (req, res) => {
-  try { res.json({ roots: discoverKnowledge() }); }
+  try { res.json({ roots: knowledge.discover() }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET/POST /api/knowledge/config - 读取/更新知识库根目录配置
 app.get('/api/knowledge/config', (req, res) => {
-  res.json(readKnowledgeConfig());
+  res.json(knowledge.readConfig());
 });
 app.post('/api/knowledge/config', (req, res) => {
   const { roots, excludeDirs } = req.body;
@@ -753,8 +541,8 @@ app.post('/api/knowledge/config', (req, res) => {
   if (Array.isArray(excludeDirs)) {
     config.excludeDirs = excludeDirs.map(String).filter(Boolean);
   }
-  writeKnowledgeConfig(config);
-  refreshKnowledgeWatcher();
+  knowledge.writeConfig(config);
+  knowledge.refreshWatcher();
   res.json({ message: 'ok' });
 });
 
@@ -762,12 +550,12 @@ app.post('/api/knowledge/config', (req, res) => {
 app.post('/api/knowledge/preview', (req, res) => {
   const { roots, excludeDirs } = req.body;
   if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
-  const excludedSet = getExcludedSet(excludeDirs);
+  const excludedSet = knowledge.getExcludedSet(excludeDirs);
   const result = roots.map(root => {
     const rootPath = resolveRoot(String(root));
     if (!fs.existsSync(rootPath)) return { root, exists: false, docCount: 0, projects: [] };
     const files = [];
-    scanKnowledgeFiles(rootPath, rootPath, files, excludedSet);
+    knowledge.scanKnowledgeFiles(rootPath, rootPath, files, excludedSet);
     const projSet = new Set();
     files.forEach(f => {
       const s = f.rel.split('/');
@@ -782,28 +570,28 @@ app.post('/api/knowledge/preview', (req, res) => {
 // .md 走 Markdown 渲染；.html 直接返回原始文件（保持原样展示）
 app.get('/api/knowledge/view', (req, res) => {
   const { root, path: relPath } = req.query;
-  const abs = resolveKnowledgePath(root, relPath);
+  const abs = knowledge.resolvePath(root, relPath);
   if (!abs) return res.status(400).send('无效路径');
   try {
     const content = fs.readFileSync(abs, 'utf-8');
     // HTML 文档：原样返回（相对资源请通过 /kbfile/<index>/<path> 访问）
-    if (isHtmlDoc(abs)) {
+    if (knowledge.isHtmlDoc(abs)) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(content);
       return;
     }
     // Markdown：剥离 YAML frontmatter（避免被 marked 误渲染成标题/正文）
-    const mdContent = stripFrontmatter(content);
+    const mdContent = knowledge.stripFrontmatter(content);
     // 收集当前 root 下所有文档路径，供前端链接跳转回退查找
     const rootPath = resolveRoot(String(root));
     const allFiles = [];
-    scanKnowledgeFiles(rootPath, rootPath, allFiles);
+    knowledge.scanKnowledgeFiles(rootPath, rootPath, allFiles);
     const fileSet = allFiles.map(f => f.rel);
-    const title = titleFromMarkdown(mdContent) || path.basename(relPath);
+    const title = knowledge.titleFromMarkdown(mdContent) || path.basename(relPath);
     // 目录数据（h2~h6）——仅作为服务端标记，实际 TOC 由客户端基于 DOM 构建（slug 规则与 index.html 完全一致）
-    const toc = tocFromMarkdown(mdContent);
+    const toc = knowledge.tocFromMarkdown(mdContent);
     // 图片路径重写上下文：渲染前设置，供 renderer.image 把相对路径转成 /kbfile 地址
-    const roots = readKnowledgeConfig().roots || [];
+    const roots = knowledge.readConfig().roots || [];
     const rootIndex = roots.findIndex(x => resolveRoot(x) === rootPath);
     kbRenderer._kbCtx = { rootIndex: rootIndex === -1 ? 0 : rootIndex, docRelPath: String(relPath) };
     // 目录 nav 占位：客户端 JS 基于渲染后的 DOM 构建嵌套 TOC 并生成锚点 id
@@ -909,18 +697,18 @@ ${tocHtml}
 // GET /api/knowledge/file - 读取单个文档内容
 app.get('/api/knowledge/file', (req, res) => {
   const { root, path: relPath } = req.query;
-  const abs = resolveKnowledgePath(root, relPath);
+  const abs = knowledge.resolvePath(root, relPath);
   if (!abs) return res.status(400).json({ error: '无效路径' });
   try {
     const content = fs.readFileSync(abs, 'utf-8');
-    res.json({ content, title: isHtmlDoc(abs) ? titleFromHtml(content) : titleFromMarkdown(content), relPath, root, kind: isHtmlDoc(abs) ? 'html' : 'md' });
+    res.json({ content, title: knowledge.isHtmlDoc(abs) ? knowledge.titleFromHtml(content) : knowledge.titleFromMarkdown(content), relPath, root, kind: knowledge.isHtmlDoc(abs) ? 'html' : 'md' });
   } catch { res.status(404).json({ error: '文件不存在' }); }
 });
 
 // PUT /api/knowledge/file - 写回（编辑）
 app.put('/api/knowledge/file', (req, res) => {
   const { root, path: relPath, content } = req.body;
-  const abs = resolveKnowledgePath(root, relPath);
+  const abs = knowledge.resolvePath(root, relPath);
   if (!abs) return res.status(400).json({ error: '无效路径' });
   try {
     fs.writeFileSync(abs, content || '', 'utf-8');
@@ -941,7 +729,7 @@ app.put('/api/knowledge/file', (req, res) => {
 
 app.get('/kb', (req, res) => {
   try {
-    const roots = discoverKnowledge();
+    const roots = knowledge.discover();
     const lines = [];
     function walkTree(nodes, prefix) {
       for (const n of nodes) {
@@ -963,7 +751,7 @@ app.use('/kb/', (req, res, next) => {
     const slashIdx = rel.indexOf('/');
     if (slashIdx === -1) {
       // /kb/<project> -> 列出该项目下所有文件路径
-      const roots = discoverKnowledge();
+      const roots = knowledge.discover();
       const root = roots.find(r => r.name === rel);
       if (!root) { res.status(404).send('项目不存在: ' + rel); return; }
       const lines = [];
@@ -982,10 +770,10 @@ app.use('/kb/', (req, res, next) => {
     // /kb/<project>/<path...> -> 返回 .md 原文
     const projectName = rel.slice(0, slashIdx);
     const filePath = rel.slice(slashIdx + 1);
-    const roots = discoverKnowledge();
+    const roots = knowledge.discover();
     const root = roots.find(r => r.name === projectName);
     if (!root) { res.status(404).send('项目不存在: ' + projectName); return; }
-    const abs = resolveKnowledgePath(root.path, filePath);
+    const abs = knowledge.resolvePath(root.path, filePath);
     if (!abs) { res.status(400).send('无效路径'); return; }
     const content = fs.readFileSync(abs, 'utf-8');
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -1004,12 +792,12 @@ app.use('/kbfile', (req, res) => {
   const slashIdx = rest.indexOf('/');
   const rootIdx = parseInt(slashIdx === -1 ? rest : rest.slice(0, slashIdx), 10);
   const relPath = slashIdx === -1 ? '' : rest.slice(slashIdx + 1);
-  const config = readKnowledgeConfig();
+  const config = knowledge.readConfig();
   const rootCfg = (config.roots || [])[rootIdx];
   if (!rootCfg) return res.status(404).send('未知 root');
   const rootPath = resolveRoot(rootCfg);
   if (!fs.existsSync(rootPath)) return res.status(404).send('root 不存在');
-  // 在 root 内解析（不能用 resolveKnowledgePath，它只放行 .md/.html/.htm 文档）
+  // 在 root 内解析（不能用 knowledge.resolvePath，它只放行 .md/.html/.htm 文档）
   const abs = path.resolve(rootPath, relPath);
   if (abs !== rootPath && !abs.startsWith(rootPath + path.sep)) return res.status(404).send('路径越界');
   let stat = null;
@@ -1039,43 +827,17 @@ function broadcast(data) {
   });
 }
 
-// —— watcher 统一健壮性 ——
-// 1) ignored 规则：目录名黑名单（与扫描一致）+ 瞬态文件模式（锁/临时/Office）
-//    保证 chokidar 不监听 .pi/tasks/*.lock 这类会产生 EPERM 的路径
-// 2) error 兜底：Windows 上文件被占用/删除时 chokidar 可能 emit error，
-//    不处理会 Unhandled error 直接崩溃——记录日志，不终止服务
-function isWatcherIgnored(p, excludedSet) {
-  if (typeof p !== 'string' || !p) return false;
-  // 路径段级匹配：检查每一段是否命中目录名黑名单（node_modules/.git/.pi 等）。
-  // chokidar 回调收到的是完整路径（如 root/node_modules/x/y.js），
-  // 只匹配 basename 会漏掉嵌套目录（原 bug），必须逐段检查。
-  const segments = p.split(/[\\/]+/).filter(Boolean);
-  for (const seg of segments) {
-    const name = seg.toLowerCase();
-    if (DEFAULT_EXCLUDED.includes(name)) return true;
-    if (excludedSet && excludedSet.has(name)) return true;
-  }
-  // 瞬态文件模式（锁文件、临时文件、Office 锁）——匹配完整路径
-  if (WATCHER_TRANSIENT_PATTERNS.some(re => re.test(p))) return true;
-  // 绝对路径黑名单
-  const norm = path.resolve(p);
-  return LOCAL_EXCLUDE_DIRS.some(d => norm === d || norm.startsWith(d + path.sep));
-}
-
-function onWatcherError(label, err) {
-  // EPERM/ENOENT 等瞬时文件错误：记录并继续，不让单文件问题打死整个服务
-  console.error(`[watcher:${label}] 监听错误（已忽略，服务继续运行）:`, err?.code || err?.message || err);
-}
-
+// watcher 统一健壮性（ignored 规则 / error 兜底）实现在 lib/knowledge.js，
+// docs / teach / knowledge 三个 watcher 共用同一套策略。
 // 使用 chokidar 监听 docs 目录变化
 const watcher = chokidar.watch(DOCS_DIR, {
   ignoreInitial: true,
   // docs 目录也要排除瞬态文件
-  ignored: (p) => isWatcherIgnored(p, null),
+  ignored: (p) => knowledge.isWatcherIgnored(p, null),
   awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
 });
 
-watcher.on('error', (err) => onWatcherError('docs', err));
+watcher.on('error', (err) => knowledge.onWatcherError('docs', err));
 
 watcher.on('all', (event, filePath) => {
   if (!filePath.endsWith('.md')) return;
@@ -1092,10 +854,10 @@ function refreshTeachWatcher() {
   teachWatcher = chokidar.watch(workspaces.map(ws => ws.path), {
     ignoreInitial: true,
     // 排除构建/依赖目录与瞬态文件，避免海量监听 handle 和 EPERM
-    ignored: (p) => isWatcherIgnored(p, null),
+    ignored: (p) => knowledge.isWatcherIgnored(p, null),
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
   });
-  teachWatcher.on('error', (err) => onWatcherError('teach', err));
+  teachWatcher.on('error', (err) => knowledge.onWatcherError('teach', err));
   teachWatcher.on('all', (event, filePath) => {
     if (!/\.html$|\.css$|\.js$/.test(filePath)) return;
     broadcast({ type: 'course-change', event });
@@ -1103,31 +865,8 @@ function refreshTeachWatcher() {
 }
 refreshTeachWatcher();
 
-// 监听知识库根目录变化
-let knowledgeWatcher = null;
-function refreshKnowledgeWatcher() {
-  if (knowledgeWatcher) { try { knowledgeWatcher.close(); } catch {} knowledgeWatcher = null; }
-  const config = readKnowledgeConfig();
-  if (!config.roots.length) return;
-  const excluded = getExcludedSet();
-  knowledgeWatcher = chokidar.watch(config.roots.map(r => resolveRoot(r)), {
-    // 文档级剪枝：非知识文档（.log/.png/.lock 等瞬态产物，.scratch 草稿区尤多）
-    // 不进监听 —— 省事件风暴，也避免 awaitWriteFinish poll 独占文件触发 EPERM。
-    // stats 为 undefined（初始路径判断）时退回目录名黑名单，行为不弱于旧版。
-    ignored: (p, stats) => {
-      if (stats && stats.isFile() && !isKnowledgeDoc(p)) return true;
-      return isWatcherIgnored(p, excluded);
-    },
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-  });
-  knowledgeWatcher.on('error', (err) => onWatcherError('knowledge', err));
-  knowledgeWatcher.on('all', (event, filePath) => {
-    if (!isKnowledgeDoc(filePath)) return;
-    broadcast({ type: 'knowledge-change', event });
-  });
-}
-refreshKnowledgeWatcher();
+// 监听知识库根目录变化（扫描 / 监听 / 失效逻辑在 lib/knowledge.js，此处只接线）
+knowledge.refreshWatcher();
 
 // 端口占用统一处理：HTTP server 与 WebSocketServer 都可能 emit 'error'。
 // 关键：new WebSocketServer({ server }) 会让端口冲突错误从 wss 实例 emit，
@@ -1210,7 +949,7 @@ function gracefulShutdown(signal) {
   console.log(`收到 ${signal}，正在优雅关闭...`);
   try { watcher && watcher.close(); } catch {}
   try { teachWatcher && teachWatcher.close(); } catch {}
-  try { knowledgeWatcher && knowledgeWatcher.close(); } catch {}
+  try { knowledge.close(); } catch {}
   try { wss.close(); } catch {}
   server.close(() => process.exit(0));
   // 兜底：3 秒后强制退出，避免 server.close 卡住导致端口不释放
