@@ -846,6 +846,8 @@ function broadcast(data) {
 // docs / teach / knowledge 三个 watcher 共用同一套策略。
 // 使用 chokidar 监听 docs 目录变化
 const watcher = chokidar.watch(DOCS_DIR, {
+  // 不跟随符号链接 / junction，避免目录闭环无限展开监听路径。
+  followSymlinks: false,
   ignoreInitial: true,
   // docs 目录也要排除瞬态文件
   ignored: (p) => knowledge.isWatcherIgnored(p, null),
@@ -867,6 +869,8 @@ function refreshTeachWatcher() {
   const workspaces = discoverWorkspaces();
   if (workspaces.length === 0) return;
   teachWatcher = chokidar.watch(workspaces.map(ws => ws.path), {
+    // 与课程递归扫描一致：不进入嵌套链接，也不展开循环 junction。
+    followSymlinks: false,
     ignoreInitial: true,
     // 排除构建/依赖目录与瞬态文件，避免海量监听 handle 和 EPERM
     ignored: (p) => knowledge.isWatcherIgnored(p, null),
