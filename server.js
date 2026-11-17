@@ -11,6 +11,8 @@ const { resolveDataDir, initDataDir } = require('./lib/data-dir');
 const { resolveListen } = require('./lib/settings');
 const { PORT_CONFLICT_EXIT_CODE, EADDRINUSE_MAX_RETRIES, EADDRINUSE_RETRY_DELAY_MS } = require('./lib/exit-codes');
 const { createKnowledgeService, KB_STATIC_EXTS } = require('./lib/knowledge');
+const { createCourseService } = require('./lib/courses');
+const { createDirectoryBrowser } = require('./lib/directory-browser');
 
 // marked 渲染器：mermaid 代码块输出为 <div class="mermaid">，供前端 mermaid.js 渲染；
 // 同时重写图片相对路径 → /kbfile/<rootIndex>/<路径>，让 Markdown 里的本地图片能正常显示
@@ -76,7 +78,6 @@ const { port: PORT, host: HOST } = resolveListen(DATA_DIR);
 
 const DOCS_DIR = path.join(DATA_DIR, 'docs');
 const METADATA_FILE = path.join(DOCS_DIR, '.metadata.json');
-const TEACH_CONFIG_FILE = path.join(DATA_DIR, 'teach.config.json');
 
 // 从 sourcePath 推导可读标题
 // 例: C:\Work\maprefact\openspec\changes\refactor-map-matrix-polymorphism\design.md
@@ -319,193 +320,55 @@ app.post('/api/metadata', (req, res) => {
 // 这些 HTML 之间用相对路径互引，因此必须保持目录树整体托管，
 // 不能像 .md 那样拍平复制进 docs 目录。
 
-function readTeachConfig() {
-  try {
-    if (fs.existsSync(TEACH_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(TEACH_CONFIG_FILE, 'utf-8'));
-    }
-  } catch {}
-  return { roots: [] };
-}
-
-function writeTeachConfig(config) {
-  fs.writeFileSync(TEACH_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
-}
-
-// 递归发现教学 workspace 的最大深度（防止异常深的目录树拖垮扫描）
-const WORKSPACE_MAX_DEPTH = 8;
-
-// 递归多层扫描 rootPath，返回所有含 lessons/ 子目录的教学 workspace 目录（绝对路径）。
-// 与知识库的递归扫描对称：workspace 可以嵌套在任意深度的子目录中，不能只扫一层。
-// 规则：
-// - 命中含 lessons/ 的目录即登记为 workspace，且不再深入其内部
-//   （workspace 由 /teach 生成、结构固定：lessons/ reference/ assets/，
-//   内部不会嵌套独立 workspace；不深入可跳过 lessons 内大量文件的遍历）
-// - 未命中则继续逐层深入
-// - 排除 node_modules / .git 等常见无关目录（复用知识库排除集合）
-function findWorkspaceDirs(rootPath, excludedSet) {
-  const found = [];
-  const excluded = excludedSet || knowledge.getExcludedSet();
-  (function walk(dir, depth) {
-    if (depth > WORKSPACE_MAX_DEPTH) return;
-    let entries = [];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      if (knowledge.isExcluded(path.join(dir, e.name), e.name, excluded)) continue;
-      const full = path.join(dir, e.name);
-      if (fs.existsSync(path.join(full, 'lessons'))) {
-        found.push(full);
-      } else {
-        walk(full, depth + 1);
-      }
-    }
-  })(rootPath, 1);
-  return found;
-}
-
-// 扫描配置的 roots，发现所有教学 workspace（任意深度下含 lessons/ 目录的文件夹）
-function discoverWorkspaces() {
-  const config = readTeachConfig();
-  const workspaces = [];
-  const usedIds = new Set();
-  for (const root of config.roots || []) {
-    const rootPath = resolveRoot(root);
-    if (!fs.existsSync(rootPath)) continue;
-    for (const wsPath of findWorkspaceDirs(rootPath)) {
-      const name = path.basename(wsPath);
-      // 生成唯一 id（优先用目录名，重名时加序号后缀）
-      let id = name;
-      let n = 2;
-      while (usedIds.has(id)) { id = `${name}-${n++}`; }
-      usedIds.add(id);
-      // 标题优先取 MISSION.md 的 "# Mission: xxx"，没有则回退文件夹名
-      workspaces.push({ id, name, title: titleFromMission(wsPath) || name, path: wsPath });
-    }
-  }
-  return workspaces;
-}
-
-// 从 workspace 根目录的 MISSION.md 提取标题（# Mission: xxx）
-// 课程树侧边栏标题优先用它，而不是文件夹名称
-function titleFromMission(wsPath) {
-  try {
-    const md = fs.readFileSync(path.join(wsPath, 'MISSION.md'), 'utf-8');
-    const m = md.match(/^#\s*Mission:?\s*(.+)$/m);
-    return m ? m[1].trim() : null;
-  } catch { return null; }
-}
-
-// 递归收集 kind 目录（lessons/ 或 reference/）下的课程 HTML 文件，
-// 子目录也要深入（如 lessons/module-1/0002-xxx.html），不能只扫一层。
-// file 字段为相对 kind 目录的 POSIX 相对路径（可含子目录），前端据此拼
-// /teach/<workspaceId>/<kind>/<file>，静态路由按多层路径解析。
-function collectCourseHtml(dir, base, acc) {
-  let entries = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      collectCourseHtml(full, base, acc);
-    } else if (e.isFile() && /\.html$/i.test(e.name)) {
-      try {
-        const stat = fs.statSync(full);
-        const content = fs.readFileSync(full, 'utf-8');
-        acc.push({
-          file: path.relative(base, full).replace(/\\/g, '/'),
-          title: knowledge.titleFromHtml(content) || e.name.replace(/\.html$/i, ''),
-          mtime: stat.mtimeMs,
-        });
-      } catch {}
-    }
-  }
-}
-
-// 列出某个 workspace 下的课程与速查卡
-function getWorkspaceContent(wsPath) {
-  const result = { lessons: [], reference: [] };
-  for (const kind of ['lessons', 'reference']) {
-    const dir = path.join(wsPath, kind);
-    if (!fs.existsSync(dir)) continue;
-    collectCourseHtml(dir, dir, result[kind]);
-    result[kind].sort((a, b) => a.file.localeCompare(b.file));
-  }
-  return result;
-}
-
-// GET /api/courses — 列出所有教学 workspace 及其课程/速查卡
-app.get('/api/courses', (req, res) => {
-  try {
-    const workspaces = discoverWorkspaces().map(ws => ({
-      id: ws.id,
-      name: ws.name,
-      title: ws.title,
-      ...getWorkspaceContent(ws.path),
-    }));
-    res.json({ workspaces });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// 课程索引、异步发现、有限监听与定时刷新统一由 lib/courses.js 管理。
+app.get('/api/courses', async (req, res) => {
+  try { res.json({ workspaces: await courses.list() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// GET/POST /api/courses/config — 读取/更新教学根目录配置
 app.get('/api/courses/config', (req, res) => {
-  res.json(readTeachConfig());
+  res.json(courses.readConfig());
 });
-
-app.post('/api/courses/config', (req, res) => {
+app.post('/api/courses/config', async (req, res) => {
   const { roots } = req.body;
-  if (!Array.isArray(roots)) {
-    return res.status(400).json({ error: 'roots 必须是字符串数组' });
-  }
-  writeTeachConfig({ roots: roots.map(r => String(r)) });
-  refreshTeachWatcher();
-  res.json({ message: 'ok' });
+  if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
+  try {
+    courses.writeConfig({ ...courses.readConfig(), roots: roots.map(String) });
+    await courses.refresh();
+    res.json({ message: 'ok' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// POST /api/courses/preview — 预览给定 roots 各自能发现多少教学 workspace
-// 用于配置对话框实时显示每个根目录是否生效、找到了哪些工作区
-app.post('/api/courses/preview', (req, res) => {
+app.post('/api/courses/preview', async (req, res) => {
   const { roots } = req.body;
-  if (!Array.isArray(roots)) {
-    return res.status(400).json({ error: 'roots 必须是字符串数组' });
-  }
-  const result = roots.map(root => {
-    const rootPath = resolveRoot(String(root));
-    if (!fs.existsSync(rootPath)) {
-      return { root, exists: false, workspaces: [] };
-    }
-    // 递归多层发现；元素用相对根目录的路径（含中间层），嵌套/同名工作区可区分
-    const wss = findWorkspaceDirs(rootPath)
-      .map(p => path.relative(rootPath, p).replace(/\\/g, '/'));
-    return { root, exists: true, workspaces: wss };
-  });
-  res.json({ preview: result });
+  if (!Array.isArray(roots)) return res.status(400).json({ error: 'roots 必须是字符串数组' });
+  try { res.json({ preview: await courses.preview(roots) }); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
 
 // 静态托管教学 workspace —— 保持 lessons/ reference/ assets/ 目录树，
 // 使课程 HTML 中的相对路径引用（../assets/style.css 等）正常工作。
 // 路径形如 /teach/<workspaceId>/lessons/0001-xxx.html
-app.use('/teach', (req, res, next) => {
-  const rel = decodeURIComponent(req.path).replace(/^\/+/, '');
-  const slashIdx = rel.indexOf('/');
-  if (slashIdx === -1) return res.status(404).send('未找到 workspace');
-  const wsId = rel.slice(0, slashIdx);
-  const fileRel = rel.slice(slashIdx + 1);
-  if (!fileRel) return res.status(404).send('未指定文件');
-  const ws = discoverWorkspaces().find(w => w.id === wsId);
-  if (!ws) return res.status(404).send('未找到 workspace');
-  const filePath = path.resolve(ws.path, fileRel);
-  // 路径安全：禁止逃逸出 workspace 根目录
-  if (filePath !== ws.path && !filePath.startsWith(ws.path + path.sep)) {
-    return res.status(400).send('无效路径');
-  }
-  // dotfiles: 'allow' —— workspace 可能位于 .scratch 等点开头的目录（teach 工作区），
-  // send 库默认 dotfiles:'ignore' 会对点目录直接 404（列表接口用 fs 直读不受影响，导致
-  // 「列表有课、点开 404」的假象）。
-  res.sendFile(filePath, { dotfiles: 'allow' }, err => {
-    if (err && !res.headersSent) res.status(404).send('文件不存在');
-  });
+app.use('/teach', async (req, res, next) => {
+  try {
+    const rel = decodeURIComponent(req.path).replace(/^\/+/, '');
+    const slashIdx = rel.indexOf('/');
+    if (slashIdx === -1) return res.status(404).send('未找到 workspace');
+    const wsId = rel.slice(0, slashIdx);
+    const fileRel = rel.slice(slashIdx + 1);
+    if (!fileRel) return res.status(404).send('未指定文件');
+    const ws = await courses.workspace(wsId);
+    if (!ws) return res.status(404).send('未找到 workspace');
+    const filePath = path.resolve(ws.path, fileRel);
+    // 路径安全：禁止逃逸出 workspace 根目录
+    if (filePath !== ws.path && !filePath.startsWith(ws.path + path.sep)) {
+      return res.status(400).send('无效路径');
+    }
+    // dotfiles: 'allow' —— workspace 可能位于 .scratch 等点开头的目录（teach 工作区），
+    // send 库默认 dotfiles:'ignore' 会对点目录直接 404（列表接口用 fs 直读不受影响，导致
+    // 「列表有课、点开 404」的假象）。
+    res.sendFile(filePath, { dotfiles: 'allow' }, err => {
+      if (err && !res.headersSent) res.status(404).send('文件不存在');
+    });
+  } catch (err) { next(err); }
 });
 
 // ============================================================
@@ -522,6 +385,29 @@ const knowledge = createKnowledgeService({
   baseDir: __dirname,
   resolveRoot,
   onKnowledgeChange: event => broadcast(event),
+});
+const courses = createCourseService({
+  dataDir: DATA_DIR, resolveRoot, knowledge,
+  onChange: event => broadcast(event),
+});
+const directoryBrowser = createDirectoryBrowser({
+  *getLocations() {
+    for (const service of [knowledge, courses]) {
+      const roots = service.readConfig().roots;
+      if (!Array.isArray(roots)) continue;
+      for (const root of roots) {
+        if (typeof root === 'string' && root) yield resolveRoot(root);
+      }
+    }
+  },
+});
+
+// Read-only directory selection; preserve duplicate query keys for strict validation.
+app.get('/api/directories', async (req, res) => {
+  try {
+    const query = new URL(req.originalUrl, 'http://localhost').searchParams;
+    res.json(await directoryBrowser.list(query));
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
 
 // GET /api/knowledge - 列出知识库文档（树形结构：root 顶层 + 目录树）
@@ -546,6 +432,8 @@ app.post('/api/knowledge/config', (req, res) => {
   knowledge.refreshWatcher();
   // 树级缓存跟随配置（工单 #6）：立即失效 + 后台重建，改配置无需重启即生效
   knowledge.refreshTreeCache();
+  // 课程发现复用知识库排除策略，配置变更也刷新课程索引。
+  courses.refresh().catch(() => {});
   res.json({ message: 'ok' });
 });
 
@@ -862,27 +750,8 @@ watcher.on('all', (event, filePath) => {
   broadcast({ type: 'file-change', event, name });
 });
 
-// 监听教学 workspace 的变化，通过 WebSocket 通知前端刷新课程列表
-let teachWatcher = null;
-function refreshTeachWatcher() {
-  if (teachWatcher) { try { teachWatcher.close(); } catch {} teachWatcher = null; }
-  const workspaces = discoverWorkspaces();
-  if (workspaces.length === 0) return;
-  teachWatcher = chokidar.watch(workspaces.map(ws => ws.path), {
-    // 与课程递归扫描一致：不进入嵌套链接，也不展开循环 junction。
-    followSymlinks: false,
-    ignoreInitial: true,
-    // 排除构建/依赖目录与瞬态文件，避免海量监听 handle 和 EPERM
-    ignored: (p) => knowledge.isWatcherIgnored(p, null),
-    awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
-  });
-  teachWatcher.on('error', (err) => knowledge.onWatcherError('teach', err));
-  teachWatcher.on('all', (event, filePath) => {
-    if (!/\.html$|\.css$|\.js$/.test(filePath)) return;
-    broadcast({ type: 'course-change', event });
-  });
-}
-refreshTeachWatcher();
+// 异步首扫；廉价端点可先就绪，课程冷请求与首扫 single-flight 合流。
+courses.start().catch(() => {});
 
 // 监听知识库根目录变化（扫描 / 监听 / 失效逻辑在 lib/knowledge.js，此处只接线）
 knowledge.refreshWatcher();
@@ -967,7 +836,7 @@ function gracefulShutdown(signal) {
   shuttingDown = true;
   console.log(`收到 ${signal}，正在优雅关闭...`);
   try { watcher && watcher.close(); } catch {}
-  try { teachWatcher && teachWatcher.close(); } catch {}
+  courses.close().catch(() => {});
   try { knowledge.close(); } catch {}
   try { wss.close(); } catch {}
   server.close(() => process.exit(0));

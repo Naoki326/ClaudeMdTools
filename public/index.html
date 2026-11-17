@@ -13,6 +13,7 @@
 <script src="/vendor/marked-katex-extension.umd.js"></script>
 <script src="/vendor/highlight.min.js"></script>
 <script src="/vendor/mermaid.min.js"></script>
+<script src="/directory-picker.js" defer></script>
 <style>
 :root {
   --bg: #ffffff; --bg-secondary: #f6f8fa; --bg-tertiary: #e8ecf0;
@@ -133,11 +134,33 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); font-size: 15px; flex-direction: column; gap: 12px; }
 
 /* 对话框 */
-.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.dialog { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: 360px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
+.dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.dialog { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: min(360px, 100%); max-width: 100%; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
 .dialog h3 { margin-bottom: 16px; }
 .dialog input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--text); margin-bottom: 16px; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+/* 设置仅滚动根目录列表，操作区保留；极矮屏由外层弹窗滚动兜底。 */
+.dialog.settings-dialog { width: 720px; min-width: 0; display: flex; flex-direction: column; }
+.settings-dialog > * { flex-shrink: 0; }
+.settings-dialog input { min-width: 0; }
+.settings-dialog > .settings-roots-list { flex: 0 1 auto; min-height: 80px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; margin-bottom: 12px; }
+.settings-root-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; background: var(--bg-secondary); }
+.settings-root-path { flex: 1 1 220px; min-width: 0; font-size: 13px; font-family: monospace; overflow-wrap: anywhere; }
+.settings-root-summary { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.settings-root-row > button { flex-shrink: 0; }
+/* HTML 内嵌目录选择器，无系统窗口、文件上传或后台目录监听。 */
+.directory-picker-overlay { z-index: 110; }
+.dialog.directory-picker { height: 560px; }
+.directory-picker-hint, .directory-picker-status { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; overflow-wrap: anywhere; }
+.directory-picker-status { margin: 10px 0; max-height: 64px; overflow-y: auto; }
+.directory-picker-path-row, .directory-picker-toolbar { display: flex; gap: 6px; margin-bottom: 12px; }
+.directory-picker-path-row input { flex: 1; margin-bottom: 0; }
+.directory-picker-toolbar { flex-wrap: wrap; }
+.directory-picker-toolbar select { flex: 1; min-width: 120px; max-width: 100%; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.settings-dialog > .directory-picker-list { flex: 1 1 auto; min-height: 80px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: 6px; }
+.directory-picker-entry { display: block; width: 100%; text-align: left; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
+.directory-picker-entry:hover, .directory-picker-entry:focus-visible { background: var(--bg-tertiary); }
+.directory-picker-more { align-self: flex-start; margin-top: 8px; }
 
 /* 状态指示 */
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
@@ -389,6 +412,8 @@ function connectWS() {
   ws.onopen = () => {
     document.getElementById('ws-status').className = 'status-dot connected';
     document.getElementById('ws-text').textContent = '已连接';
+    // 断线期间可能漏过通知；每次连接成功都重新校验课程缓存。
+    invalidateCourseList();
   };
   ws.onclose = () => {
     document.getElementById('ws-status').className = 'status-dot disconnected';
@@ -401,7 +426,7 @@ function connectWS() {
       if (currentView === 'docs') loadFileList();
       if (currentFile && !isEditing) { loadFile(currentFile); showToast('文档已更新'); }
     } else if (data.type === 'course-change') {
-      if (currentView === 'courses') loadCourseList();
+      invalidateCourseList();
       // 若当前正在查看的课程文件被改动，刷新 iframe
       if (currentCourse) {
         const frame = document.getElementById('course-frame');
@@ -1035,7 +1060,9 @@ function showToast(msg) {
 // ============================================================
 let currentView = 'docs';
 let currentCourse = null;   // { wsId, kind, file, title }
-let courseDataCache = [];   // 缓存课程列表数据
+let courseDataCache = [];   // 缓存课程列表数据（空列表也可复用）
+let courseListDirty = true;
+let courseListRequest = null; // 至多一个在途请求记录，持有共享 Promise
 // 课程列表展开状态（默认全部折叠）：workspace + 子分组
 // 持久化到 localStorage（与知识库文件树一致），刷新后保持
 const expandedCourseWs = new Set();
@@ -1078,13 +1105,53 @@ function switchView(view) {
   else loadFileList();
 }
 
-// 加载课程列表
-async function loadCourseList() {
-  const res = await fetch('/api/courses');
-  const data = await res.json();
+// 通知在知识库视图也必须失效，但无需立即扫描。
+function invalidateCourseList() {
+  courseListDirty = true;
+  if (currentView === 'courses') return loadCourseList();
+}
+
+// 加载课程列表：普通进入复用缓存；通知/配置保存可强制刷新。
+// 单个 dirty 标记合并刷新期间的新变更，不积累 Promise 队列或轮询计时器。
+function loadCourseList(force = false) {
+  if (force) courseListDirty = true;
+  if (courseListRequest) return courseListRequest.promise;
+  if (!courseListDirty) {
+    renderCourseList();
+    return Promise.resolve(true);
+  }
+  // 先登记再发起，fetch 即使同步抛错也能正确释放在途状态。
+  const request = { promise: null };
+  courseListRequest = request;
+  request.promise = (async () => {
+    try {
+      do {
+        // 在请求开始时清除，而非完成时，避免吃掉在途收到的失效通知。
+        courseListDirty = false;
+        const res = await fetch('/api/courses');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        courseDataCache = data.workspaces || [];
+        renderCourseList();
+      } while (courseListDirty);
+      return true;
+    } catch {
+      // 保留旧列表；下次进入/通知可重试，事件入口无需处理拒绝。
+      courseListDirty = true;
+      showToast('课程列表加载失败，请重新进入课程视图重试');
+      return false;
+    } finally {
+      // 在工作函数退出前清理，避免另一个微任务失效时复用已完成的请求。
+      courseListRequest = null;
+    }
+  })();
+  return request.promise;
+}
+
+// 纯缓存重绘：展开、折叠和选中课程绝不触发网络请求。
+function renderCourseList() {
   const list = document.getElementById('course-list');
-  const workspaces = data.workspaces || [];
-  courseDataCache = workspaces;
+  const workspaces = courseDataCache;
 
   if (workspaces.length === 0) {
     list.innerHTML = `<div class="empty-state" style="padding:20px;font-size:14px;text-align:center;gap:16px">
@@ -1144,7 +1211,7 @@ function toggleCourseWs(id) {
   if (expandedCourseWs.has(id)) expandedCourseWs.delete(id);
   else expandedCourseWs.add(id);
   persistCourseExpanded();
-  loadCourseList();
+  renderCourseList();
 }
 
 // 折叠/展开 子分组（课程/速查卡）
@@ -1152,7 +1219,7 @@ function toggleCourseGroup(key) {
   if (expandedCourseGroups.has(key)) expandedCourseGroups.delete(key);
   else expandedCourseGroups.add(key);
   persistCourseExpanded();
-  loadCourseList();
+  renderCourseList();
 }
 
 // 打开课程（用 iframe 展示，保持相对路径引用）
@@ -1193,7 +1260,7 @@ function openCourse(wsId, kind, file, fromHistory) {
   document.getElementById('sidebar-open-btn').style.display = sidebarCollapsed ? '' : 'none';
 
   document.getElementById('content').innerHTML = `<iframe id="course-frame" class="course-frame" src="${escapeAttr(src)}"></iframe>`;
-  loadCourseList();
+  renderCourseList();
   focusReadingPane();
 }
 
@@ -1226,12 +1293,13 @@ async function showCourseConfigDialog() {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
-    <div class="dialog" style="min-width:480px">
+    <div class="dialog settings-dialog">
       <h3>⚙ 课程根目录</h3>
       <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录的多层子文件夹，自动发现含 <code>lessons/</code> 的教学 workspace。</div>
-      <div id="roots-list" style="margin-bottom:12px"></div>
+      <div id="roots-list" class="settings-roots-list"></div>
       <div style="display:flex;gap:6px;margin-bottom:16px">
         <input type="text" id="new-root" placeholder="例如 C:/Work/AI" style="flex:1;margin-bottom:0">
+        <button class="btn" type="button" onclick="openDirectoryPicker('new-root')">浏览…</button>
         <button class="btn" onclick="addRootLine()">添加</button>
       </div>
       <div class="dialog-actions">
@@ -1286,9 +1354,9 @@ function renderRootsList() {
       badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.workspaces.join(', '))}">✓ ${p.workspaces.length} 个 · ${escapeHtml(p.workspaces.join(', '))}</span>`;
     }
     return `
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-secondary)">
-      <span style="flex:1;font-size:13px;font-family:monospace;word-break:break-all">${escapeHtml(r)}</span>
-      ${badge}
+    <div class="settings-root-row">
+      <span class="settings-root-path">${escapeHtml(r)}</span>
+      <span class="settings-root-summary">${badge}</span>
       <button class="delete-btn" style="opacity:1" onclick="removeRootLine(${i})" title="移除">×</button>
     </div>`;
   }).join('');
@@ -1317,18 +1385,21 @@ function removeRootLine(i) {
 
 async function saveRoots() {
   const roots = window._pendingRoots || [];
-  const res = await fetch('/api/courses/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ roots }),
-  });
-  document.querySelector('.dialog-overlay')?.remove();
-  if (res.ok) {
-    await loadCourseList();
-    showToast('已保存课程配置');
-  } else {
-    const err = await res.json().catch(() => ({}));
-    showToast(err.error || '保存失败');
+  try {
+    const res = await fetch('/api/courses/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roots }),
+    });
+    document.querySelector('.dialog-overlay')?.remove();
+    if (res.ok) {
+      if (await loadCourseList(true)) showToast('已保存课程配置');
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || '保存失败');
+    }
+  } catch {
+    showToast('保存课程配置失败，请重试');
   }
 }
 
@@ -1356,12 +1427,13 @@ async function showKnowledgeConfigDialog() {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
-    <div class="dialog" style="min-width:520px">
+    <div class="dialog settings-dialog">
       <h3>⚙ 知识库根目录</h3>
       <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">server 会递归扫描这些目录下的 <code>.md</code> / <code>.html</code> 文档（排除 node_modules/.git/bin 等），按项目文件夹分组。文件保持原位，不复制。</div>
-      <div id="kb-roots-list" style="margin-bottom:12px"></div>
+      <div id="kb-roots-list" class="settings-roots-list"></div>
       <div style="display:flex;gap:6px;margin-bottom:16px">
         <input type="text" id="kb-new-root" placeholder="例如 C:/Work 或 C:/Work/AI" style="flex:1;margin-bottom:0">
+        <button class="btn" type="button" onclick="openDirectoryPicker('kb-new-root')">浏览…</button>
         <button class="btn" onclick="kbAddRoot()">添加</button>
       </div>
       <div style="margin-bottom:6px;font-size:13px;font-weight:600">排除目录名</div>
@@ -1416,9 +1488,9 @@ function kbRenderList() {
     else if (!p.docCount) badge = '<span style="font-size:11px;color:var(--text-secondary)">0 个文档</span>';
     else badge = `<span style="font-size:11px;color:#2ea043" title="${escapeHtml(p.projects.join(', '))}">✓ ${p.docCount} 个 · ${escapeHtml(p.projects.slice(0,3).join(', '))}${p.projects.length>3?'…':''}</span>`;
     return `
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-secondary)">
-      <span style="flex:1;font-size:13px;font-family:monospace;word-break:break-all">${escapeHtml(r)}</span>
-      ${badge}
+    <div class="settings-root-row">
+      <span class="settings-root-path">${escapeHtml(r)}</span>
+      <span class="settings-root-summary">${badge}</span>
       <button class="delete-btn" style="opacity:1" onclick="kbRemoveRoot(${i})" title="移除">×</button>
     </div>`;
   }).join('');
