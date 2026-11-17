@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 const { freePort, sleep, REPO_ROOT, withWindowsTaskLock } = require('./helpers');
 
@@ -40,16 +41,16 @@ async function makeGuardianScript(port) {
   };
 }
 
-// 按「生产启动路径」拉起守护：wscript 执行注册产物 vbs（Run "...", 0, False：
-// 隐藏窗口、不等待）。旧用例直接 `cmd /c` 直跑——那有控制台 stdin，节流原语
+// 按「生产启动路径」拉起守护：wscript 执行注册产物 vbs（Run "...", 0, True：
+// 隐藏窗口、等待守护）。旧用例直接 `cmd /c` 直跑——那有控制台 stdin，节流原语
 // 行为正常，复现不了隐藏窗口下的现场。
 function launchGuardianViaWscript(g) {
   const wscript = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe');
   return spawn(wscript, [g.vbsPath], { windowsHide: true, stdio: 'ignore', env: g.env });
 }
 
-// 停掉 wscript 拉起的守护：vbs 的 Run False 不等待，wscript 写完启动指令即退出，
-// 守护 cmd 是孤儿进程（不在任何测试进程树里）。按命令行里的数据目录名
+// 停掉 wscript 拉起的守护：按命令行里的数据目录名定位 CMD，兼容历史 Run False
+// 脱离出来的孤儿 CMD，也覆盖同步等待的 Run True 包装。按数据目录名
 // （lanbook-guardian-<pid>-<ts>，全局唯一）找到守护 cmd，taskkill /T 连 node
 // 子进程一起杀。双保险：杀前先写停止标记——即使 taskkill 未命中，守护也会在
 // 下一轮循环顶部自退，不会复活服务。
@@ -326,6 +327,102 @@ function writeFakeServer(g, { exitCode, conflictLine }) {
   assert.ok(cmd.includes(`"${real}"`), '生成的守护脚本应含 server.js 绝对路径（替换前提）');
   fs.writeFileSync(g.cmdPath, cmd.replace(`"${real}"`, `"${script}"`), 'utf-8');
   return script;
+}
+
+test('守护脚本：并发拉起只留一个守护，正常退出/强杀后都能重新获得锁', async t => {
+  if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+  const g = await makeGuardianScript(await freePort());
+  t.after(() => {
+    stopGuardian(g.dataDir);
+    try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+  });
+  // 假服务立即退出且不绑定端口：重复守护不能靠「探到端口」侥幸避免被测症状。
+  // 整个重启延时期间仍必须持锁，而不是仅在服务启动时互斥。
+  writeFakeServer(g, { exitCode: 100 });
+  const wrappers = Array.from({ length: 8 }, () => launchGuardianViaWscript(g));
+  const alive = child => child.exitCode === null && child.signalCode === null;
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const log = fs.existsSync(g.logPath) ? fs.readFileSync(g.logPath, 'utf8') : '';
+    if (log.includes('[fake-launch]') && wrappers.filter(alive).length === 1) break;
+    await sleep(100);
+  }
+  assert.equal(wrappers.filter(alive).length, 1, '重复启动必须退出，不能累积等待 ping 的 CMD/VBS');
+  assert.match(fs.readFileSync(g.logPath, 'utf8'), /\[fake-launch\]/, '唯一实例仍应执行服务启动');
+  const first = wrappers.find(alive);
+  // 保留锁文件，正常停止后再启动；文件存在本身不能阻止重启。
+  fs.writeFileSync(path.join(g.dataDir, '.service-stopped'), 'test stop');
+  await waitForWrapperExit(first);
+  const lockPath = path.join(g.dataDir, '.autostart-guardian.lock');
+  assert.ok(fs.existsSync(lockPath), '句柄锁文件无需删除');
+  fs.rmSync(path.join(g.dataDir, '.service-stopped'));
+  const before = fs.readFileSync(g.logPath, 'utf8').split('[fake-launch]').length - 1;
+  const second = launchGuardianViaWscript(g);
+  const launches = await collectLaunchTimes(g.logPath, before + 1, 15000);
+  assert.ok(launches.length > before && alive(second), '正常停止后应可接管残留锁文件');
+
+  // 强杀整个测试进程树，模拟异常退出，不执行任何用户态解锁/删除逻辑。
+  const killed = spawnSync('taskkill', ['/PID', String(second.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
+  assert.equal(killed.status, 0, '应确实结束本用例创建的进程树');
+  await waitForWrapperExit(second);
+  const thirdBefore = fs.readFileSync(g.logPath, 'utf8').split('[fake-launch]').length - 1;
+  const third = launchGuardianViaWscript(g);
+  const restarted = await collectLaunchTimes(g.logPath, thirdBefore + 1, 15000);
+  assert.ok(restarted.length > thirdBefore && alive(third), '强杀后内核应自动释放锁，不留永久陈旧锁');
+  fs.writeFileSync(path.join(g.dataDir, '.service-stopped'), 'test stop');
+  await waitForWrapperExit(third);
+});
+
+for (const phase of ['service-running', 'standby', 'backoff']) {
+  test(`守护脚本：${phase} 期间新入口不能累积第二个守护`, async t => {
+    if (process.platform !== 'win32') return t.skip('守护脚本仅 Windows');
+    const port = await freePort();
+    const g = await makeGuardianScript(port);
+    t.after(() => {
+      stopGuardian(g.dataDir);
+      try { fs.rmSync(g.dataDir, { recursive: true, force: true }); } catch {}
+    });
+    if (phase === 'standby') {
+      const holder = net.createServer();
+      await new Promise((resolve, reject) => {
+        holder.once('error', reject);
+        holder.listen(port, '127.0.0.1', resolve);
+      });
+      t.after(() => new Promise(resolve => holder.close(resolve)));
+    } else {
+      const script = writeFakeServer(g, { exitCode: 42 });
+      if (phase === 'service-running') {
+        // 不绑端口且持续运行，不能用端口独占冒充守护单实例。
+        fs.writeFileSync(script, `console.log('[fake-launch]');\nsetInterval(() => {}, 1000);\n`, 'utf8');
+      }
+    }
+    const owner = launchGuardianViaWscript(g);
+    if (phase === 'standby') {
+      const busyFlag = path.join(g.dataDir, '.service-busy');
+      const deadline = Date.now() + 15000;
+      while (!fs.existsSync(busyFlag) && Date.now() < deadline) await sleep(100);
+      assert.ok(fs.existsSync(busyFlag), '先确认守护进入端口待命');
+    } else {
+      const count = phase === 'backoff' ? 2 : 1;
+      const launches = await collectLaunchTimes(g.logPath, count, 15000);
+      assert.ok(launches.length >= count, '先确认服务运行或重复冲突进入失败退避');
+      if (phase === 'backoff') await sleep(250); // 假服务退出后，处于第二次约 6s 退避窗口
+    }
+    const duplicates = Array.from({ length: 3 }, () => launchGuardianViaWscript(g));
+    await Promise.all(duplicates.map(waitForWrapperExit));
+    assert.equal(owner.exitCode, null, '原守护必须持续持锁，不能由新入口抢占');
+    assert.equal(owner.signalCode, null);
+    assert.ok(duplicates.every(child => child.exitCode === 0), '所有重复入口应直接成功退出，而非积累待命/退避循环');
+  });
+}
+
+async function waitForWrapperExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.removeListener('exit', done); reject(new Error('等待守护包装退出超时')); }, 15000);
+    function done() { clearTimeout(timer); resolve(); }
+    child.once('exit', done);
+  });
 }
 
 // 轮询 service.log 统计 [fake-launch] 行数，记录每一次新增的墙钟时刻

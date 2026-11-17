@@ -209,6 +209,34 @@ test('registerAutostart(win32)：生成 vbs/cmd 守护包装 + PowerShell 注册
   assert.ok(sawCall(run, 'schtasks', '/Query', '/TN', 'lanbook-autostart'), '注册后应查询校验');
 });
 
+test('registerAutostart(win32)：VBS 等待守护 + IgnoreNew，CMD 在循环外持有数据目录级独占锁', () => {
+  const base = mkTempDir('lanbook-as-single-');
+  t_cleanup(base);
+  const dataDir = path.join(base, 'data with spaces');
+  const run = fakeRun();
+  registerAutostart({ dataDir, serverJs: SERVER_JS, platform: 'win32', run });
+
+  const vbs = fs.readFileSync(path.join(dataDir, 'autostart.vbs'), 'utf8');
+  assert.match(vbs, /, 0, True\s*$/, '计划任务必须等待守护退出，不能启动后立即报完成');
+  const ps = run.calls.find(c => c.cmd === 'powershell.exe' && c.args[3].includes('Register-ScheduledTask'));
+  assert.match(ps.args[3], /-MultipleInstances IgnoreNew\b/, '登录/解锁触发时忽略仍在运行的任务');
+
+  const cmd = fs.readFileSync(path.join(dataDir, 'autostart-task.cmd'), 'utf8');
+  const gate = `call :guardian 2>nul 9>"${path.join(dataDir, '.autostart-guardian.lock')}"`;
+  assert.ok(cmd.includes(`${gate}\nexit /b 0\n:guardian\n`), '拿锁失败必须直接退出，禁止落入守护体');
+  assert.ok(cmd.indexOf(gate) < cmd.indexOf(':loop'), '互斥范围必须覆盖端口探测、服务与所有延时分支');
+  assert.equal(cmd.split(gate).length, 2, '整段守护生命周期只拿锁一次');
+  assert.ok(!cmd.includes(`del "${path.join(dataDir, '.autostart-guardian.lock')}"`), '锁靠句柄释放，不得按文件存在判断或删除锁文件');
+
+  // 重注册/卸载也不能把锁路径换掉，让尚未退出的旧实例和新实例各拿一把锁。
+  const lockPath = path.join(dataDir, '.autostart-guardian.lock');
+  fs.writeFileSync(lockPath, 'persistent lock file');
+  registerAutostart({ dataDir, serverJs: SERVER_JS, platform: 'win32', run });
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), 'persistent lock file');
+  removeAutostart({ dataDir, platform: 'win32', run });
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), 'persistent lock file');
+});
+
 // 守护节流与端口探测的生成物契约（守护风暴加固）：
 // 隐藏 wscript 窗口（生产启动路径）没有可用的控制台 stdin，`timeout /t` 实测
 // 65ms 即返——待命/重启节流失效，守护循环空转。睡眠原语换成不依赖控制台

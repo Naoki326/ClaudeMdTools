@@ -6,7 +6,7 @@
 
 文件保持原位 · 实时刷新 · 手机 / 平板随时看 · 在线编辑写回 · AI 可直接 URL 访问
 
-![version](https://img.shields.io/badge/version-1.11.0-blue)
+![version](https://img.shields.io/badge/version-1.11.1-blue)
 ![license](https://img.shields.io/badge/license-ISC-green)
 ![node](https://img.shields.io/badge/node-%3E%3D18-green)
 ![zero-build](https://img.shields.io/badge/zero--build-原生%20JS%2C%20无打包-orange)
@@ -274,6 +274,8 @@ lanbook autostart         # 装成全局的话
 | 下次登录 | 任务再触发 | launchd 再加载 | default.target 再拉起 |
 
 stdout/stderr 统一追加到 `~/.lanbook/logs/service.log`；端口 / 监听地址由数据目录 `settings.json` 决定。stop 均为「本次停下、下次登录自启恢复」。
+
+**Windows 升级到 1.11.1**：新版通过 VBS 等待 + 计划任务 `IgnoreNew`、数据目录级独占句柄锁，防止重复守护累积。升级包不会自动清理旧守护或重新生成自启脚本：应先停止旧守护与服务、确认退出，再用新版 `lanbook autostart` 重新注册，最后只启动一次。不要只杀 `ping.exe`，也不要删除 `.autostart-guardian.lock` 判断或解除持锁；细节见 [ADR-0005](docs/adr/0005-cross-platform-autostart.md#单实例保护后续修订)。
 
 配套命令：
 
